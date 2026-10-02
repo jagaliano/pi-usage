@@ -1,4 +1,7 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AuthStorage, inMemoryAuthStorage } from "../lib/auth.js";
 import {
   fetchAnthropicQuotasWithToken,
@@ -7,10 +10,12 @@ import {
   fetchGitHubCopilotQuotasWithToken,
   fetchKimiCodingQuotasWithToken,
   fetchOllamaCloudQuotasWithToken,
+  fetchOpenCodeGoQuotas,
   fetchOpenRouterQuotasWithToken,
   fetchSyntheticQuotas,
   fetchXaiQuotasWithToken,
 } from "./fetch.js";
+import { resetOpenCodeGoApiKeyCache } from "./opencode-go-config.js";
 
 const originalFetch = globalThis.fetch;
 
@@ -493,5 +498,132 @@ describe("fetchXaiQuotasWithToken", () => {
       success: false,
       error: { kind: "http", message: "token rejected" },
     });
+  });
+});
+
+describe("fetchOpenCodeGoQuotas", () => {
+  let homeDir = "";
+
+  beforeEach(() => {
+    // Hermetic: a real exported OPENCODE_GO_API_KEY would otherwise win over
+    // the empty in-memory auth storage and turn these "no credentials" tests
+    // into live-credential fetches. vi.unstubAllEnvs restores the original in
+    // afterEach.
+    vi.stubEnv("OPENCODE_GO_API_KEY", "");
+    resetOpenCodeGoApiKeyCache();
+  });
+
+  afterEach(async () => {
+    vi.unstubAllEnvs();
+    resetOpenCodeGoApiKeyCache();
+    if (homeDir) {
+      await rm(homeDir, { recursive: true, force: true });
+      homeDir = "";
+    }
+  });
+
+  async function stubEmptyHome() {
+    homeDir = await mkdtemp(join(tmpdir(), "pi-usage-go-home-"));
+    vi.stubEnv("HOME", homeDir);
+    resetOpenCodeGoApiKeyCache();
+    return homeDir;
+  }
+
+  it("uses the stored auth.json key and converts windows", async () => {
+    await stubEmptyHome();
+    const fetchSpy = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          usage: {
+            rolling: { status: "ok", percent: 12, resetsAt: "2026-09-17T19:29:31.391Z" },
+            weekly: { status: "ok", percent: 34, resetsAt: "2026-09-21T00:00:00.000Z" },
+            monthly: { status: "rate-limited", percent: 100, resetsAt: "2026-10-16T13:49:43.000Z" },
+          },
+        }),
+        { status: 200 },
+      ),
+    );
+    globalThis.fetch = fetchSpy as unknown as typeof fetch;
+
+    const result = await fetchOpenCodeGoQuotas(
+      inMemoryAuthStorage({ "opencode-go": { apiKey: "sk-stored" } }),
+    );
+
+    expect(result).toMatchObject({ success: true });
+    if (!result.success) throw new Error("expected success");
+    expect(result.data.windows.map((w) => w.label)).toEqual([
+      "5h Rolling",
+      "Weekly",
+      "Monthly",
+    ]);
+    expect(result.data.windows[2]).toMatchObject({ usedPercent: 100, limited: true });
+    const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    expect((init.headers as Record<string, string>).Authorization).toBe("Bearer sk-stored");
+  });
+
+  it("reports a config error when no key exists anywhere", async () => {
+    await stubEmptyHome();
+    const fetchSpy = vi.fn();
+    globalThis.fetch = fetchSpy as unknown as typeof fetch;
+
+    const result = await fetchOpenCodeGoQuotas(inMemoryAuthStorage());
+
+    expect(result).toMatchObject({ success: false, error: { kind: "config" } });
+    if (result.success) throw new Error("expected failure");
+    expect(result.error.message).toContain("pi /login opencode-go");
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("prefers OPENCODE_GO_API_KEY over credential files", async () => {
+    const home = await stubEmptyHome();
+    await mkdir(join(home, ".config", "opencode", "opencode-quota"), { recursive: true });
+    await writeFile(
+      join(home, ".config", "opencode", "opencode-quota", "opencode-go.json"),
+      JSON.stringify({ apiKey: "sk-from-file" }),
+    );
+    vi.stubEnv("OPENCODE_GO_API_KEY", "sk-from-env");
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ usage: { rolling: { percent: 1 } } }), { status: 200 }),
+    ) as unknown as typeof fetch;
+
+    await fetchOpenCodeGoQuotas(inMemoryAuthStorage());
+    const [url, init] = (globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock
+      .calls[0] as [string, RequestInit];
+    expect(url).toBe("https://opencode.ai/zen/go/v1/usage");
+    expect((init.headers as Record<string, string>).Authorization).toBe("Bearer sk-from-env");
+  });
+
+  it("explains the migration for a legacy workspaceId/authCookie config", async () => {
+    const home = await stubEmptyHome();
+    await mkdir(join(home, ".config", "opencode", "opencode-quota"), { recursive: true });
+    await writeFile(
+      join(home, ".config", "opencode", "opencode-quota", "opencode-go.json"),
+      JSON.stringify({ workspaceId: "wrk_1", authCookie: "Fe26.2**abc" }),
+    );
+
+    const result = await fetchOpenCodeGoQuotas(inMemoryAuthStorage());
+
+    expect(result).toMatchObject({ success: false, error: { kind: "config" } });
+    if (result.success) throw new Error("expected failure");
+    expect(result.error.message).toContain("no longer supported");
+  });
+
+  it("reads the OpenCode CLI auth.json as a fallback", async () => {
+    const home = await stubEmptyHome();
+    await mkdir(join(home, ".local", "share", "opencode"), { recursive: true });
+    await writeFile(
+      join(home, ".local", "share", "opencode", "auth.json"),
+      JSON.stringify({ "opencode-go": { type: "api_key", key: "sk-cli" } }),
+    );
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ usage: { rolling: { percent: 2 } } }), { status: 200 }),
+    ) as unknown as typeof fetch;
+
+    const result = await fetchOpenCodeGoQuotas(inMemoryAuthStorage());
+
+    expect(result).toMatchObject({ success: true });
+    const [, init] = (globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock
+      .calls[0] as [string, RequestInit];
+    expect((init.headers as Record<string, string>).Authorization).toBe("Bearer sk-cli");
   });
 });

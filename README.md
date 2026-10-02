@@ -21,6 +21,8 @@ pi /login minimax
 # paste MINIMAX_API_KEY (or set MINIMAX_API_KEY env var)
 ```
 
+OpenCode Go quotas come from the official `https://opencode.ai/zen/go/v1/usage` endpoint and read the API key from `pi /login opencode-go` (`auth.json`), then `OPENCODE_GO_API_KEY`, then a `apiKey` field in `~/.config/opencode/opencode-quota/opencode-go.json` or the OpenCode CLI `~/.local/share/opencode/auth.json`. The old `workspaceId`/`authCookie` dashboard scraping is no longer supported.
+
 Restart or `/reload` to load the extension.
 
 ## Commands
