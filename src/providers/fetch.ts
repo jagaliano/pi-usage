@@ -42,6 +42,32 @@ async function providerAccessToken(
 }
 
 /**
+ * Read the *stored* credential for a provider, without falling back to
+ * ambient environment variables.
+ *
+ * `authStorage.getApiKey` resolves ambient auth as well: Pi's built-in
+ * opencode-go provider authenticates with `OPENCODE_API_KEY`, so a resolved
+ * lookup returns that generic variable before this provider ever consults its
+ * own `OPENCODE_GO_API_KEY`. Reading the stored credential directly keeps the
+ * documented precedence (stored → Go-specific env → generic env → files)
+ * honest, and avoids selecting a Zen-scoped key for the Go endpoint.
+ */
+function storedProviderApiKey(
+  authStorage: AuthStorage,
+  provider: string,
+): string | undefined {
+  const credential = authStorage.get(provider);
+  if (typeof credential === "string") return credential.trim() || undefined;
+  if (!credential || typeof credential !== "object") return undefined;
+  const record = credential as Record<string, unknown>;
+  for (const field of ["key", "apiKey", "access"]) {
+    const value = record[field];
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return undefined;
+}
+
+/**
  * Detect a raw Anthropic API key. OAuth subscription tokens use the
  * `sk-ant-oat` prefix, while direct API keys use `sk-ant-api`.
  */
@@ -424,10 +450,14 @@ export async function fetchOpenCodeGoQuotas(
   authStorage: AuthStorage,
   signal?: AbortSignal,
 ): Promise<QuotasResult> {
-  // Prefer the key stored via `pi /login opencode-go` (auth.json), then the
-  // OPENCODE_GO_API_KEY env var, then a config file / OpenCode CLI auth.json.
-  let apiKey = await providerAccessToken(authStorage, "opencode-go");
+  // Precedence: stored `pi /login opencode-go` credential, then the
+  // Go-specific OPENCODE_GO_API_KEY, then the generic OPENCODE_API_KEY (the
+  // variable Pi's own opencode-go provider uses), then a config file / the
+  // OpenCode CLI auth.json. Pi's resolved lookup is kept as a last resort for
+  // auth backends that do not expose the raw stored credential.
+  let apiKey = storedProviderApiKey(authStorage, "opencode-go");
   if (!apiKey) apiKey = resolveOpenCodeGoApiKeyFromEnv()?.apiKey;
+  if (!apiKey) apiKey = await providerAccessToken(authStorage, "opencode-go");
 
   if (!apiKey) {
     const fileResult = await resolveOpenCodeGoApiKeyFromFilesCached();
@@ -443,7 +473,7 @@ export async function fetchOpenCodeGoQuotas(
   if (!apiKey) {
     return failure(
       "No OpenCode Go API key found. Run `pi /login opencode-go`," +
-        " set OPENCODE_GO_API_KEY, or add an \"apiKey\" field to" +
+        " set OPENCODE_GO_API_KEY or OPENCODE_API_KEY, or add an \"apiKey\" field to" +
         " ~/.config/opencode/opencode-quota/opencode-go.json",
       "config",
     );

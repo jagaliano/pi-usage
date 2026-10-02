@@ -11,7 +11,8 @@
  *
  * Configuration:
  * - Pi auth entry: `pi /login opencode-go` (preferred)
- * - Environment: OPENCODE_GO_API_KEY
+ * - Environment: OPENCODE_GO_API_KEY or OPENCODE_API_KEY (the variable Pi's
+ *   built-in opencode-go provider uses)
  * - Config file: ~/.config/opencode/opencode-quota/opencode-go.json
  * - OpenCode CLI auth: ~/.local/share/opencode/auth.json
  */

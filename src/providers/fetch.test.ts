@@ -19,6 +19,11 @@ import { resetOpenCodeGoApiKeyCache } from "./opencode-go-config.js";
 
 const originalFetch = globalThis.fetch;
 
+function authorizationFromCall(call: unknown): string | undefined {
+  const [, init] = call as [string, RequestInit];
+  return (init?.headers as Record<string, string> | undefined)?.Authorization;
+}
+
 afterEach(() => {
   globalThis.fetch = originalFetch;
   vi.restoreAllMocks();
@@ -510,6 +515,7 @@ describe("fetchOpenCodeGoQuotas", () => {
     // into live-credential fetches. vi.unstubAllEnvs restores the original in
     // afterEach.
     vi.stubEnv("OPENCODE_GO_API_KEY", "");
+    vi.stubEnv("OPENCODE_API_KEY", "");
     resetOpenCodeGoApiKeyCache();
   });
 
@@ -591,6 +597,73 @@ describe("fetchOpenCodeGoQuotas", () => {
       .calls[0] as [string, RequestInit];
     expect(url).toBe("https://opencode.ai/zen/go/v1/usage");
     expect((init.headers as Record<string, string>).Authorization).toBe("Bearer sk-from-env");
+  });
+
+  it("falls back to OPENCODE_API_KEY, the variable Pi's own provider uses", async () => {
+    await stubEmptyHome();
+    vi.stubEnv("OPENCODE_API_KEY", "sk-pi-env");
+    const fetchSpy = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ usage: { rolling: { percent: 1 } } }), { status: 200 }),
+    );
+    globalThis.fetch = fetchSpy as unknown as typeof fetch;
+
+    await fetchOpenCodeGoQuotas(inMemoryAuthStorage());
+
+    expect(authorizationFromCall(fetchSpy.mock.calls[0])).toBe("Bearer sk-pi-env");
+  });
+
+  it("prefers OPENCODE_GO_API_KEY over Pi's resolved generic key", async () => {
+    await stubEmptyHome();
+    vi.stubEnv("OPENCODE_GO_API_KEY", "sk-go-env");
+    vi.stubEnv("OPENCODE_API_KEY", "sk-pi-env");
+    const fetchSpy = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ usage: { rolling: { percent: 1 } } }), { status: 200 }),
+    );
+    globalThis.fetch = fetchSpy as unknown as typeof fetch;
+
+    // Pi's resolved lookup returns the generic OPENCODE_API_KEY (its own
+    // opencode-go provider auth) while no credential is stored, so the
+    // Go-specific variable must still win.
+    const resolvedOnlyStorage = {
+      get: () => undefined,
+      getApiKey: async () => "sk-pi-env",
+    };
+
+    await fetchOpenCodeGoQuotas(resolvedOnlyStorage);
+
+    expect(authorizationFromCall(fetchSpy.mock.calls[0])).toBe("Bearer sk-go-env");
+  });
+
+  it("prefers the stored credential over both environment variables", async () => {
+    await stubEmptyHome();
+    vi.stubEnv("OPENCODE_GO_API_KEY", "sk-go-env");
+    vi.stubEnv("OPENCODE_API_KEY", "sk-pi-env");
+    const fetchSpy = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ usage: { rolling: { percent: 1 } } }), { status: 200 }),
+    );
+    globalThis.fetch = fetchSpy as unknown as typeof fetch;
+
+    await fetchOpenCodeGoQuotas(
+      inMemoryAuthStorage({ "opencode-go": { apiKey: "sk-stored" } }),
+    );
+
+    expect(authorizationFromCall(fetchSpy.mock.calls[0])).toBe("Bearer sk-stored");
+  });
+
+  it("does not leak OpenCode CLI auth-file contents in a config error", async () => {
+    const home = await stubEmptyHome();
+    await mkdir(join(home, ".local", "share", "opencode"), { recursive: true });
+    await writeFile(
+      join(home, ".local", "share", "opencode", "auth.json"),
+      "{ not json sk-secret-leak",
+    );
+
+    const result = await fetchOpenCodeGoQuotas(inMemoryAuthStorage());
+
+    expect(result).toMatchObject({ success: false, error: { kind: "config" } });
+    if (result.success) throw new Error("expected failure");
+    expect(result.error.message).not.toContain("sk-secret-leak");
+    expect(result.error.message).toContain("not valid JSON");
   });
 
   it("explains the migration for a legacy workspaceId/authCookie config", async () => {

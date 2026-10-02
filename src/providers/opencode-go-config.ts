@@ -28,19 +28,27 @@ async function readJson(
   | { state: "loaded"; data: Record<string, unknown> }
   | { state: "invalid"; error: string }
 > {
+  let raw: string;
   try {
-    const raw = await readFile(path, "utf-8");
+    raw = await readFile(path, "utf-8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
+      return { state: "missing" };
+    }
+    return { state: "invalid", error: "Failed to read config file" };
+  }
+
+  try {
     const parsed = JSON.parse(raw) as unknown;
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
       return { state: "invalid", error: "Config file must contain a JSON object" };
     }
     return { state: "loaded", data: parsed as Record<string, unknown> };
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
-      return { state: "missing" };
-    }
-    const message = error instanceof Error ? error.message : String(error);
-    return { state: "invalid", error: `Failed to read config file: ${message}` };
+  } catch {
+    // Never surface raw parser diagnostics. This path reads the OpenCode CLI
+    // auth.json, which holds credentials for several providers, and a
+    // JSON.parse error can quote the offending input.
+    return { state: "invalid", error: "Config file is not valid JSON" };
   }
 }
 
@@ -68,7 +76,11 @@ export function apiKeyFromConfigData(
 export function resolveOpenCodeGoApiKeyFromEnv(
   env: NodeJS.ProcessEnv = process.env,
 ): Extract<ResolvedOpenCodeGoApiKey, { state: "configured" }> | null {
-  const apiKey = env.OPENCODE_GO_API_KEY?.trim();
+  // OPENCODE_GO_API_KEY is this provider's own override; OPENCODE_API_KEY is
+  // the variable Pi's built-in opencode-go provider authenticates with, so a
+  // user who already set it for Pi needs no extra configuration.
+  const apiKey =
+    env.OPENCODE_GO_API_KEY?.trim() || env.OPENCODE_API_KEY?.trim();
   if (!apiKey) return null;
   return { state: "configured", apiKey, source: "env" };
 }

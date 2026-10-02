@@ -16,6 +16,7 @@ const CREDENTIAL_ENV_KEYS = [
   "OLLAMA_API_KEY",
   "MINIMAX_API_KEY",
   "OPENCODE_GO_API_KEY",
+  "OPENCODE_API_KEY",
 ];
 const originalFetch = globalThis.fetch;
 
