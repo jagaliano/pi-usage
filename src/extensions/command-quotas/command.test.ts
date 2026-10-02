@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { inMemoryAuthStorage } from "../../lib/auth.js";
+import { SUPPORTED_PROVIDERS } from "../../lib/quotas.js";
 import { registerUsageCommands } from "./command.js";
+import { getProviderCommandInfo } from "./provider-commands.js";
 
 // Provider credentials can leak in from the host environment (pi resolves
 // API keys from env vars, and the Synthetic provider reads
@@ -27,13 +29,18 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
 });
 
-function registeredCommands() {
+function registeredCommands(
+  options: Parameters<typeof registerUsageCommands>[1] = {},
+) {
   const commands = new Map<string, any>();
-  registerUsageCommands({
-    registerCommand(name: string, command: any) {
-      commands.set(name, command);
-    },
-  } as any);
+  registerUsageCommands(
+    {
+      registerCommand(name: string, command: any) {
+        commands.set(name, command);
+      },
+    } as any,
+    options,
+  );
   return commands;
 }
 
@@ -49,7 +56,7 @@ function contextWithoutCredentials(notify: ReturnType<typeof vi.fn>) {
 
 describe("quota command visibility", () => {
   it("hides unconfigured providers from the combined dashboard", async () => {
-    const commands = registeredCommands();
+    const commands = registeredCommands({ isConfigured: () => false });
     const notify = vi.fn();
 
     await commands.get("usage").handler(
@@ -60,8 +67,31 @@ describe("quota command visibility", () => {
     expect(notify).toHaveBeenCalledWith("No quota data available", "info");
   });
 
+  it("registers provider commands only for configured providers", () => {
+    const commands = registeredCommands({
+      isConfigured: (provider) => provider === "anthropic",
+    });
+
+    expect(commands.has("usage")).toBe(true);
+    expect(commands.has("anthropic:usage")).toBe(true);
+    expect(commands.has("grok:usage")).toBe(false);
+    expect(commands.has("xai:usage")).toBe(false);
+    expect(commands.has("minimax:usage")).toBe(false);
+  });
+
+  it("registers every provider when hiding is disabled", () => {
+    const commands = registeredCommands({ hideUnconfigured: false });
+
+    for (const provider of SUPPORTED_PROVIDERS) {
+      expect(commands.has(getProviderCommandInfo(provider).commandName)).toBe(
+        true,
+      );
+    }
+    expect(commands.has("grok:usage")).toBe(true);
+  });
+
   it("keeps provider-specific commands diagnostic", async () => {
-    const commands = registeredCommands();
+    const commands = registeredCommands({ hideUnconfigured: false });
     const notify = vi.fn();
 
     await commands.get("anthropic:usage").handler(

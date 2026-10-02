@@ -5,6 +5,7 @@ import {
   configLoader,
 } from "../../config.js";
 import { quotaAuthStorage } from "../../lib/auth.js";
+import { isProviderConfigured } from "../../lib/provider-availability.js";
 import {
   fetchAllProviderQuotas,
   fetchProviderQuotas,
@@ -87,7 +88,17 @@ function formatSnapshotsForNotify(snapshots: Snapshot[]): string {
   return lines.join("\n") || "No quota data available";
 }
 
-export function registerUsageCommands(pi: ExtensionAPI): void {
+export interface RegisterUsageCommandsOptions {
+  /** Override the `hideUnconfiguredProviders` setting. */
+  hideUnconfigured?: boolean;
+  /** Override credential detection. */
+  isConfigured?: (provider: SupportedQuotaProvider) => boolean;
+}
+
+export function registerUsageCommands(
+  pi: ExtensionAPI,
+  options: RegisterUsageCommandsOptions = {},
+): void {
   pi.registerCommand("usage", {
     description: "Display remaining usage for all supported providers",
     handler: async (_args, ctx) => {
@@ -109,7 +120,16 @@ export function registerUsageCommands(pi: ExtensionAPI): void {
     },
   });
 
+  // Unconfigured providers would otherwise add a `/grok:usage`-style command
+  // that only ever reports "no credentials". Pi has no way to hide a
+  // registered command, so skip registration instead.
+  const hideUnconfigured =
+    options.hideUnconfigured ??
+    configLoader.getConfig().hideUnconfiguredProviders;
+  const isConfigured = options.isConfigured ?? isProviderConfigured;
+
   for (const provider of SUPPORTED_PROVIDERS) {
+    if (hideUnconfigured && !isConfigured(provider)) continue;
     const info = getProviderCommandInfo(provider);
     pi.registerCommand(info.commandName, {
       description: `Display remaining ${info.title.toLowerCase()}`,

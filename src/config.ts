@@ -11,7 +11,8 @@ export type UsageFeatureId =
   | "usageStatus"
   | "tokenStatus"
   | "quotaWarnings"
-  | "deferToSynthetic";
+  | "deferToSynthetic"
+  | "hideUnconfiguredProviders";
 
 export const USAGE_EXTENSIONS_REQUEST_EVENT =
   "usage:extensions:request" as const;
@@ -32,6 +33,8 @@ export interface UsageConfig {
   quotaWarnings?: boolean;
   /** When true and pi-synthetic's usage footer is active, hide pi-usage's Synthetic footer. */
   deferToSynthetic?: boolean;
+  /** When true, only register `/provider:usage` commands for providers with credentials. */
+  hideUnconfiguredProviders?: boolean;
 }
 
 export interface ResolvedUsageConfig {
@@ -42,6 +45,7 @@ export interface ResolvedUsageConfig {
   tokenStatus: boolean;
   quotaWarnings: boolean;
   deferToSynthetic: boolean;
+  hideUnconfiguredProviders: boolean;
 }
 
 const DEFAULT_CONFIG: ResolvedUsageConfig = {
@@ -52,6 +56,7 @@ const DEFAULT_CONFIG: ResolvedUsageConfig = {
   tokenStatus: true,
   quotaWarnings: true,
   deferToSynthetic: true,
+  hideUnconfiguredProviders: true,
 };
 
 let pendingMigrationNotice = false;
@@ -91,6 +96,9 @@ class UsageConfigStore {
       quotaWarnings: input?.quotaWarnings ?? DEFAULT_CONFIG.quotaWarnings,
       deferToSynthetic:
         input?.deferToSynthetic ?? DEFAULT_CONFIG.deferToSynthetic,
+      hideUnconfiguredProviders:
+        input?.hideUnconfiguredProviders ??
+        DEFAULT_CONFIG.hideUnconfiguredProviders,
     };
   }
 
@@ -193,7 +201,22 @@ const FEATURE_META: Array<{
     description:
       "When pi-synthetic is loaded, hide pi-usage's Synthetic footer to avoid duplicates",
   },
+  {
+    id: "hideUnconfiguredProviders",
+    label: "Hide unconfigured providers",
+    description:
+      "Only register `/provider:usage` commands for providers that have credentials",
+  },
 ];
+
+/**
+ * Behaviour switches rather than loadable sub-extensions. The settings UI must
+ * not require these to be registered by a sub-extension.
+ */
+const NON_LOADABLE_FEATURES = new Set<UsageFeatureId>([
+  "deferToSynthetic",
+  "hideUnconfiguredProviders",
+]);
 
 export function registerUsageSettings(
   pi: ExtensionAPI,
@@ -239,7 +262,7 @@ export function registerUsageSettings(
         );
         if (!feature) continue;
         if (
-          feature.id !== "deferToSynthetic" &&
+          !NON_LOADABLE_FEATURES.has(feature.id) &&
           !getLoadedFeatures().has(feature.id)
         ) {
           ctx.ui.notify(

@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Added
+- **Hide unconfigured provider commands**: pi-usage registered a `/provider:usage` command for every supported provider, so a command like `/grok:usage` showed up in the command list even with no credentials, and only ever reported a config error. Commands are now registered only for providers that have an environment variable, an `auth.json` entry, or a provider config file. On by default; toggle it under `/usage:settings` (`hideUnconfiguredProviders`). Run `/reload` after logging into a new provider so its command appears.
+
 ## [2.1.0] - 2026-09-11
 
 ### Added

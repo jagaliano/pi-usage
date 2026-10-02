@@ -66,6 +66,7 @@ Automatic warning notifications when usage or the current pace risks exhausting 
 - Token usage status and `/tokens`
 - Quota warning notifications
 - Defer to Synthetic — hide the Synthetic footer when `pi-synthetic` is also showing usage
+- Hide unconfigured providers — only register `/provider:usage` commands for providers that have credentials (on by default)
 
 Settings are saved to `~/.pi/agent/extensions/usage.json` (global) or `.pi/usage.json` (per-project). Run `/reload` after changing command visibility.
 
