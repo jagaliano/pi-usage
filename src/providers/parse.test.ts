@@ -1272,4 +1272,51 @@ describe("parseCommandCodeUsage", () => {
       }),
     ).toEqual([]);
   });
+
+  it("reports a zero-cap window with recorded usage as exhausted", () => {
+    const windows = parseCommandCodeUsage({
+      account: { login: "acme", orgId: null },
+      credits: {
+        monthlyCredits: 0,
+        purchasedCredits: 0,
+        freeCredits: 0,
+        remainingCredits: 0,
+        windowLimits: [{ window: "fiveHour", used: 1, cap: 0, resetAt: 1_790_913_204 }],
+      },
+      subscription: null,
+      summary: null,
+    });
+
+    expect(windows[0]).toMatchObject({
+      label: "5h Rolling",
+      usedPercent: 100,
+      usedValue: 1,
+      limitValue: 0,
+      limited: true,
+    });
+    expect(windows[1]).toMatchObject({
+      label: "Credits Remaining",
+      usedValue: 0,
+      limitValue: 0,
+      isBalance: true,
+    });
+  });
+
+  it("shows a known zero balance when the summary is unavailable", () => {
+    const windows = parseCommandCodeUsage({
+      account: { login: "acme", orgId: null },
+      credits: {
+        monthlyCredits: 0,
+        purchasedCredits: 0,
+        freeCredits: 0,
+        remainingCredits: 0,
+        windowLimits: [],
+      },
+      subscription: null,
+      summary: null,
+    });
+
+    expect(windows.map((w) => w.label)).toEqual(["Credits Remaining"]);
+    expect(windows[0]).toMatchObject({ usedValue: 0, limitValue: 0, isBalance: true });
+  });
 });

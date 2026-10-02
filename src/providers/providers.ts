@@ -998,6 +998,15 @@ function commandCodeDate(value: string | null): Date | null {
   return Number.isNaN(date.getTime()) ? null : date;
 }
 
+/** A zero/absent cap with recorded usage means "no allowance left", not "no limit". */
+function capPercent(used: number, cap: number): number {
+  return cap > 0 ? safePercent(used, cap) : 100;
+}
+
+function capReached(used: number, cap: number): boolean {
+  return cap > 0 ? used >= cap : true;
+}
+
 /**
  * Command Code credit/subscription usage.
  *
@@ -1014,28 +1023,28 @@ export function parseCommandCodeUsage(data: CommandCodeQuota): QuotaWindow[] {
   const periodEnd = commandCodeDate(subscription?.currentPeriodEnd ?? null);
 
   const fiveHour = credits?.windowLimits.find((limit) => limit.window === "fiveHour");
-  if (fiveHour && fiveHour.cap > 0) {
+  if (fiveHour && (fiveHour.cap > 0 || fiveHour.used > 0)) {
     windows.push({
       provider: "commandcode",
       label: "5h Rolling",
-      usedPercent: safePercent(fiveHour.used, fiveHour.cap),
+      usedPercent: capPercent(fiveHour.used, fiveHour.cap),
       resetsAt: fiveHour.resetAt === null ? new Date(0) : new Date(fiveHour.resetAt * 1000),
       windowSeconds: 5 * 60 * 60,
       usedValue: fiveHour.used,
       limitValue: fiveHour.cap,
       isCurrency: true,
       showPace: false,
-      limited: fiveHour.used >= fiveHour.cap,
+      limited: capReached(fiveHour.used, fiveHour.cap),
       nextLabel: "Resets",
     });
   }
 
   const weekly = credits?.windowLimits.find((limit) => limit.window === "weekly");
-  if (weekly && weekly.cap > 0) {
+  if (weekly && (weekly.cap > 0 || weekly.used > 0)) {
     windows.push({
       provider: "commandcode",
       label: "Weekly",
-      usedPercent: safePercent(weekly.used, weekly.cap),
+      usedPercent: capPercent(weekly.used, weekly.cap),
       resetsAt: weekly.resetAt === null ? new Date(0) : new Date(weekly.resetAt * 1000),
       windowSeconds: 7 * 24 * 60 * 60,
       usedValue: weekly.used,
@@ -1043,7 +1052,7 @@ export function parseCommandCodeUsage(data: CommandCodeQuota): QuotaWindow[] {
       isCurrency: true,
       showPace: true,
       paceScale: 1 / 7,
-      limited: weekly.used >= weekly.cap,
+      limited: capReached(weekly.used, weekly.cap),
       nextLabel: "Resets",
     });
   }
@@ -1069,9 +1078,9 @@ export function parseCommandCodeUsage(data: CommandCodeQuota): QuotaWindow[] {
       limited: spent >= pool,
       nextLabel: periodEnd ? "Renews" : "Resets",
     });
-  } else if (credits && remaining > 0) {
-    // No usage summary: report the balance as a tracking-only window rather
-    // than inventing a consumed amount.
+  } else if (credits) {
+    // No usage summary: report the balance (including a known zero) as a
+    // tracking-only window rather than inventing a consumed amount.
     windows.push({
       provider: "commandcode",
       label: "Credits Remaining",
