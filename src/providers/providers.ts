@@ -1,5 +1,6 @@
 import type { QuotaWindow } from "../types/quotas.js";
 import { safePercent } from "../utils/quotas-severity.js";
+import type { CommandCodeQuota } from "./commandcode.js";
 
 function parseDateish(value: unknown): Date {
   if (typeof value === "number") {
@@ -981,6 +982,108 @@ export function parseXaiUsage(data: any): QuotaWindow[] {
       showPace: false,
       limited: onDemandUsed >= onDemandLimit,
       nextLabel: "Resets",
+    });
+  }
+
+  return windows;
+}
+
+/** Fold an epoch-seconds, epoch-milliseconds, or ISO value into a Date. */
+function commandCodeDate(value: string | null): Date | null {
+  if (!value) return null;
+  const trimmed = value.trim();
+  const timestamp = /^\d+$/.test(trimmed) ? Number(trimmed) : Date.parse(trimmed);
+  if (!Number.isFinite(timestamp) || timestamp < 0) return null;
+  const date = new Date(timestamp >= 1e12 ? timestamp : timestamp * 1000);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+/**
+ * Command Code credit/subscription usage.
+ *
+ * Rendered like the OpenCode Go provider: a rolling 5-hour and a weekly
+ * credit window with the same labels, percent bars, and pace behaviour, plus
+ * a monthly budget window built from the billing-period spend against the
+ * remaining credit pool.
+ */
+export function parseCommandCodeUsage(data: CommandCodeQuota): QuotaWindow[] {
+  const windows: QuotaWindow[] = [];
+  const credits = data?.credits ?? null;
+  const summary = data?.summary ?? null;
+  const subscription = data?.subscription ?? null;
+  const periodEnd = commandCodeDate(subscription?.currentPeriodEnd ?? null);
+
+  const fiveHour = credits?.windowLimits.find((limit) => limit.window === "fiveHour");
+  if (fiveHour && fiveHour.cap > 0) {
+    windows.push({
+      provider: "commandcode",
+      label: "5h Rolling",
+      usedPercent: safePercent(fiveHour.used, fiveHour.cap),
+      resetsAt: fiveHour.resetAt === null ? new Date(0) : new Date(fiveHour.resetAt * 1000),
+      windowSeconds: 5 * 60 * 60,
+      usedValue: fiveHour.used,
+      limitValue: fiveHour.cap,
+      isCurrency: true,
+      showPace: false,
+      limited: fiveHour.used >= fiveHour.cap,
+      nextLabel: "Resets",
+    });
+  }
+
+  const weekly = credits?.windowLimits.find((limit) => limit.window === "weekly");
+  if (weekly && weekly.cap > 0) {
+    windows.push({
+      provider: "commandcode",
+      label: "Weekly",
+      usedPercent: safePercent(weekly.used, weekly.cap),
+      resetsAt: weekly.resetAt === null ? new Date(0) : new Date(weekly.resetAt * 1000),
+      windowSeconds: 7 * 24 * 60 * 60,
+      usedValue: weekly.used,
+      limitValue: weekly.cap,
+      isCurrency: true,
+      showPace: true,
+      paceScale: 1 / 7,
+      limited: weekly.used >= weekly.cap,
+      nextLabel: "Resets",
+    });
+  }
+
+  // The remaining credit pool only makes sense as a "total" once we know what
+  // has been spent this billing period, so require both credits and summary.
+  const remaining = credits?.remainingCredits ?? 0;
+  const spent = summary?.totalCost ?? 0;
+  const pool = remaining + spent;
+
+  if (credits && summary && pool > 0) {
+    windows.push({
+      provider: "commandcode",
+      label: "Monthly Budget",
+      usedPercent: safePercent(spent, pool),
+      resetsAt: periodEnd ?? new Date(0),
+      windowSeconds: 30 * 24 * 60 * 60,
+      usedValue: spent,
+      limitValue: pool,
+      isCurrency: true,
+      showPace: true,
+      paceScale: 1,
+      limited: spent >= pool,
+      nextLabel: periodEnd ? "Renews" : "Resets",
+    });
+  } else if (credits && remaining > 0) {
+    // No usage summary: report the balance as a tracking-only window rather
+    // than inventing a consumed amount.
+    windows.push({
+      provider: "commandcode",
+      label: "Credits Remaining",
+      usedPercent: 0,
+      resetsAt: periodEnd ?? new Date(0),
+      windowSeconds: 30 * 24 * 60 * 60,
+      usedValue: remaining,
+      limitValue: remaining,
+      isCurrency: true,
+      isBalance: true,
+      showPace: false,
+      ...(periodEnd ? { nextLabel: "Renews" } : {}),
     });
   }
 

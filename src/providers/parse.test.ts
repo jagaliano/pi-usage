@@ -10,6 +10,7 @@ import { parseSyntheticUsage } from "./providers.js";
 import { parseXaiUsage } from "./providers.js";
 import { parseZaiUsage } from "./providers.js";
 import { parseOpenCodeGoUsage } from "./providers.js";
+import { parseCommandCodeUsage } from "./providers.js";
 
 describe("parseAnthropicUsage", () => {
   it("maps oauth usage response into quota windows", () => {
@@ -1158,5 +1159,117 @@ describe("parseMiniMaxUsage", () => {
 
     // video (5h) should be before video / wk (7d).
     expect(windows.map((w) => w.label)).toEqual(["video", "video / wk"]);
+  });
+});
+
+describe("parseCommandCodeUsage", () => {
+  const fullQuota = {
+    account: { login: "acme", orgId: "org_1" },
+    credits: {
+      monthlyCredits: 20,
+      purchasedCredits: 5,
+      freeCredits: 0,
+      remainingCredits: 25,
+      windowLimits: [
+        { window: "fiveHour" as const, used: 2.5, cap: 10, resetAt: 1_790_913_204 },
+        { window: "weekly" as const, used: 10, cap: 40, resetAt: 1_790_999_999 },
+      ],
+    },
+    subscription: {
+      planId: "pro",
+      status: "active",
+      currentPeriodStart: "2026-09-01T00:00:00.000Z",
+      currentPeriodEnd: "2026-10-01T00:00:00.000Z",
+    },
+    summary: { totalCost: 5, totalCount: 10 },
+  };
+
+  it("maps 5h, weekly, and monthly windows like the OpenCode Go provider", () => {
+    const windows = parseCommandCodeUsage(fullQuota);
+
+    expect(windows.map((w) => w.label)).toEqual(["5h Rolling", "Weekly", "Monthly Budget"]);
+    expect(windows[0]).toMatchObject({
+      provider: "commandcode",
+      usedPercent: 25,
+      windowSeconds: 5 * 60 * 60,
+      usedValue: 2.5,
+      limitValue: 10,
+      isCurrency: true,
+      showPace: false,
+      nextLabel: "Resets",
+    });
+    expect(windows[0].resetsAt.getTime()).toBe(1_790_913_204_000);
+    expect(windows[1]).toMatchObject({
+      usedPercent: 25,
+      windowSeconds: 7 * 24 * 60 * 60,
+      isCurrency: true,
+      showPace: true,
+    });
+    expect(windows[1].paceScale).toBeCloseTo(1 / 7);
+    // pool = 25 remaining + 5 spent = 30
+    expect(windows[2]).toMatchObject({
+      usedValue: 5,
+      limitValue: 30,
+      windowSeconds: 30 * 24 * 60 * 60,
+      isCurrency: true,
+      nextLabel: "Renews",
+    });
+    expect(windows[2].usedPercent).toBeCloseTo(16.667, 2);
+    expect(windows[2].resetsAt.toISOString()).toBe("2026-10-01T00:00:00.000Z");
+  });
+
+  it("marks fully consumed windows as limited", () => {
+    const windows = parseCommandCodeUsage({
+      ...fullQuota,
+      credits: {
+        ...fullQuota.credits,
+        remainingCredits: 0,
+        windowLimits: [
+          { window: "fiveHour", used: 10, cap: 10, resetAt: 1_790_913_204 },
+          { window: "weekly", used: 40, cap: 40, resetAt: 1_790_999_999 },
+        ],
+      },
+      summary: { totalCost: 30, totalCount: 99 },
+    });
+
+    expect(windows.every((w) => w.limited)).toBe(true);
+    expect(windows[0].usedPercent).toBe(100);
+  });
+
+  it("tolerates a window without a reset time", () => {
+    const windows = parseCommandCodeUsage({
+      account: { login: "acme", orgId: null },
+      credits: {
+        monthlyCredits: 0,
+        purchasedCredits: 0,
+        freeCredits: 0,
+        remainingCredits: 5,
+        windowLimits: [{ window: "fiveHour", used: 1, cap: 5, resetAt: null }],
+      },
+      subscription: null,
+      summary: null,
+    });
+
+    // No summary, so no monthly budget; the balance is reported as tracking-only.
+    expect(windows.map((w) => w.label)).toEqual(["5h Rolling", "Credits Remaining"]);
+    expect(windows[0].resetsAt.getTime()).toBe(0);
+    expect(windows[1]).toMatchObject({
+      usedValue: 5,
+      limitValue: 5,
+      isBalance: true,
+      showPace: false,
+    });
+    expect(windows[1].nextLabel).toBeUndefined();
+  });
+
+  it("returns no windows when nothing usable is present", () => {
+    expect(
+      parseCommandCodeUsage({
+        account: { login: "acme", orgId: null },
+        credits: null,
+        subscription: null,
+        summary: null,
+      }),
+    ).toEqual([]);
   });
 });

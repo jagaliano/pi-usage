@@ -266,4 +266,41 @@ describe("QuotasComponent", () => {
     expect(output).not.toContain("usage unavailable");
     expect(output).not.toContain("{");
   });
+
+  it("renders a balance window as remaining, not a used/limit ratio", () => {
+    const component = makeComponent();
+    component.setState({
+      type: "loaded",
+      snapshots: [
+        {
+          provider: "commandcode",
+          result: {
+            success: true,
+            data: {
+              provider: "commandcode",
+              windows: [
+                {
+                  provider: "commandcode",
+                  label: "Credits Remaining",
+                  usedPercent: 0,
+                  resetsAt: new Date(0),
+                  windowSeconds: 30 * 24 * 3600,
+                  usedValue: 12.5,
+                  limitValue: 12.5,
+                  isCurrency: true,
+                  isBalance: true,
+                  showPace: false,
+                },
+              ],
+            },
+          },
+        },
+      ],
+    });
+
+    const output = stripAnsi(component.render(70).join("\n"));
+    expect(output).toContain("Credits Remaining");
+    expect(output).toContain("$12.50 remaining");
+    expect(output).not.toContain("$12.50 / $12.50");
+  });
 });

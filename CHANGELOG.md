@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Added
+- **Command Code provider**: reads account quota from the Command Code API (`/alpha/whoami`, `/alpha/billing/credits`, `/alpha/billing/subscriptions`, `/alpha/usage/summary`) using the same endpoints and window semantics as `pi-commandcode-provider`. Renders like the OpenCode Go provider: a 5-hour rolling and a weekly credit window plus a monthly budget window, shown in `/usage` and `/commandcode:usage`. Reads the API key from `pi /login`, `COMMAND_CODE_API_KEY` / `COMMANDCODE_API_KEY`, or `~/.commandcode/auth.json` / `~/.omp/agent/auth.json`.
+
 ## [2.1.0] - 2026-09-11
 
 ### Added
