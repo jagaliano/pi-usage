@@ -237,9 +237,12 @@ export function registerUsageSettings(
 
       while (true) {
         const choices = FEATURE_META.map((feature) => {
-          const loaded = getLoadedFeatures().has(feature.id)
-            ? ""
-            : " (not loaded)";
+          // Behaviour switches are never registered by a sub-extension, so
+          // they must not be annotated as unloaded.
+          const registered =
+            NON_LOADABLE_FEATURES.has(feature.id) ||
+            getLoadedFeatures().has(feature.id);
+          const loaded = registered ? "" : " (not loaded)";
           const enabled = draft[feature.id] ? "enabled" : "disabled";
           return `${feature.label}: ${enabled}${loaded}`;
         });

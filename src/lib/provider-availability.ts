@@ -6,30 +6,41 @@ import { hasStoredCredential } from "./auth.js";
 
 /**
  * Environment variables Pi (or the provider itself) reads for each quota
- * provider.
+ * provider. Names come from `@earendil-works/pi-ai`'s `env-api-keys.js` and
+ * from the fetchers that read the environment directly (synthetic,
+ * ollama-cloud).
  *
- * This list deliberately errs toward inclusion: a false positive only keeps an
- * extra `/provider:usage` command visible, while a false negative would hide a
- * command for a provider the user has actually configured.
+ * A variable only belongs here if it actually authenticates that provider's
+ * quota endpoint. Adding an unrelated variable keeps a command visible that
+ * can only fail, which is the noise this feature exists to remove.
  */
 const PROVIDER_ENV_VARS: Record<SupportedQuotaProvider, readonly string[]> = {
-  anthropic: ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"],
-  "openai-codex": ["OPENAI_API_KEY", "OPENAI_CODEX_API_KEY"],
+  // pi-ai discovers all three for Anthropic (`env-api-keys.js`).
+  anthropic: [
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "ANTHROPIC_OAUTH_TOKEN",
+  ],
+  // openai-codex has no environment credential in pi-ai; it is OAuth plus the
+  // `~/.codex/auth.json` fallback below. OPENAI_API_KEY belongs to the `openai`
+  // provider and does not authenticate openai-codex, so it is deliberately
+  // absent — including it would leave `/codex:usage` visible and broken.
+  "openai-codex": [],
   "github-copilot": ["COPILOT_GITHUB_TOKEN"],
   openrouter: ["OPENROUTER_API_KEY"],
   synthetic: ["SYNTHETIC_API_KEY"],
   xai: ["XAI_API_KEY"],
-  zai: ["ZAI_API_KEY", "ZAI_CODING_CN_API_KEY"],
+  zai: ["ZAI_API_KEY"],
   // OPENCODE_GO_* predates the usage API; still a signal that the provider is
-  // configured.
+  // configured. OPENCODE_API_KEY is what pi-ai reads for opencode-go.
   "opencode-go": [
-    "OPENCODE_GO_API_KEY",
     "OPENCODE_API_KEY",
+    "OPENCODE_GO_API_KEY",
     "OPENCODE_GO_WORKSPACE_ID",
   ],
-  "kimi-coding": ["KIMI_API_KEY", "MOONSHOT_API_KEY"],
+  "kimi-coding": ["KIMI_API_KEY"],
   "ollama-cloud": ["OLLAMA_API_KEY"],
-  minimax: ["MINIMAX_API_KEY", "MINIMAX_CN_API_KEY"],
+  minimax: ["MINIMAX_API_KEY"],
 };
 
 /** Config files that hold a credential for providers that use one. */

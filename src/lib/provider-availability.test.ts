@@ -21,7 +21,8 @@ describe("isProviderConfigured", () => {
   it("is true when the provider's env var is set", () => {
     const cases: Array<[string, NodeJS.ProcessEnv]> = [
       ["anthropic", { ANTHROPIC_API_KEY: "k" } as NodeJS.ProcessEnv],
-      ["openai-codex", { OPENAI_API_KEY: "k" } as NodeJS.ProcessEnv],
+      ["anthropic", { ANTHROPIC_AUTH_TOKEN: "k" } as NodeJS.ProcessEnv],
+      ["anthropic", { ANTHROPIC_OAUTH_TOKEN: "k" } as NodeJS.ProcessEnv],
       ["openrouter", { OPENROUTER_API_KEY: "k" } as NodeJS.ProcessEnv],
       ["synthetic", { SYNTHETIC_API_KEY: "k" } as NodeJS.ProcessEnv],
       ["xai", { XAI_API_KEY: "k" } as NodeJS.ProcessEnv],
@@ -48,6 +49,30 @@ describe("isProviderConfigured", () => {
       isProviderConfigured("xai", {
         ...EMPTY,
         env: { XAI_API_KEY: "   " } as NodeJS.ProcessEnv,
+      }),
+    ).toBe(false);
+  });
+
+  it("does not treat another provider's key as a credential", () => {
+    // openai-codex authenticates via OAuth or ~/.codex/auth.json; a plain
+    // OPENAI_API_KEY belongs to the `openai` provider and would only leave
+    // /codex:usage visible and failing.
+    expect(
+      isProviderConfigured("openai-codex", {
+        ...EMPTY,
+        env: { OPENAI_API_KEY: "k" } as NodeJS.ProcessEnv,
+      }),
+    ).toBe(false);
+    expect(
+      isProviderConfigured("kimi-coding", {
+        ...EMPTY,
+        env: { MOONSHOT_API_KEY: "k" } as NodeJS.ProcessEnv,
+      }),
+    ).toBe(false);
+    expect(
+      isProviderConfigured("minimax", {
+        ...EMPTY,
+        env: { MINIMAX_CN_API_KEY: "k" } as NodeJS.ProcessEnv,
       }),
     ).toBe(false);
   });
