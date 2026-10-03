@@ -2,11 +2,13 @@ import type {
   ExtensionAPI,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import { truncateToWidth } from "@earendil-works/pi-tui";
 import {
   USAGE_CONFIG_UPDATED_EVENT,
   USAGE_EXTENSIONS_REGISTER_EVENT,
   USAGE_EXTENSIONS_REQUEST_EVENT,
   type UsageConfigUpdatedPayload,
+  type UsageStatusPlacement,
   configLoader,
 } from "../../config.js";
 
@@ -108,6 +110,10 @@ function createStatusRefresher() {
   let lastStatus: WindowStatus[] | undefined;
   let inFlight = false;
   let queued = false;
+  // Render target for the status. Kept in sync with the config rather than
+  // re-read from the config store so an in-session placement change applies
+  // even when the extension's module instance has a stale config snapshot.
+  let placement: UsageStatusPlacement = "statusBar";
 
   // Bumped whenever the active ctx/provider is replaced or the refresher stops.
   // This prevents an old async fetch from writing to a replacement session.
@@ -130,7 +136,37 @@ function createStatusRefresher() {
     if (!ctx) return false;
     try {
       if (!ctx.hasUI) return true;
-      ctx.ui.setStatus(EXTENSION_ID, typeof text === "function" ? text(ctx) : text);
+      const value = typeof text === "function" ? text(ctx) : text;
+
+      // Widget component factories only render in the TUI. In RPC/print/json
+      // modes, fall back to the shared status row so the status is not lost.
+      if (placement === "statusBar" || ctx.mode !== "tui") {
+        // Vacate the widget channel when switching back to the shared row.
+        ctx.ui.setWidget(EXTENSION_ID, undefined);
+        ctx.ui.setStatus(EXTENSION_ID, value);
+        return true;
+      }
+
+      // Dedicated line: keep the shared status row clear so other extensions
+      // are not displaced, and render the status in our own widget. A factory
+      // (not a string array) lets us truncate to a single line instead of
+      // letting `Text` wrap into multiple rows.
+      ctx.ui.setStatus(EXTENSION_ID, undefined);
+      if (!value) {
+        ctx.ui.setWidget(EXTENSION_ID, undefined, { placement });
+        return true;
+      }
+      ctx.ui.setWidget(
+        EXTENSION_ID,
+        () => ({
+          render(width: number): string[] {
+            if (width <= 0) return [""];
+            return [` ${truncateToWidth(value, Math.max(0, width - 1), "...")}`];
+          },
+          invalidate(): void {},
+        }),
+        { placement },
+      );
       return true;
     } catch (error) {
       if (isStaleContextError(error) && activeContext === ctx) deactivate();
@@ -183,6 +219,9 @@ function createStatusRefresher() {
   }
 
   return {
+    setPlacement(next: UsageStatusPlacement): void {
+      placement = next;
+    },
     async refreshFor(ctx: ExtensionContext): Promise<void> {
       activeContext = ctx;
       activeProvider = getContextProvider(ctx);
@@ -215,6 +254,9 @@ function createStatusRefresher() {
 export default async function (pi: ExtensionAPI) {
   await configLoader.load();
   const refresher = createStatusRefresher();
+  refresher.setPlacement(
+    configLoader.getConfig().usageStatusPlacement ?? "statusBar",
+  );
   const unsubscribeEventBusListeners: Array<() => void> = [];
   let enabled = configLoader.getConfig().usageStatus;
   let deferToSynthetic = configLoader.getConfig().deferToSynthetic;
@@ -242,6 +284,7 @@ export default async function (pi: ExtensionAPI) {
     const config = (data as UsageConfigUpdatedPayload).config;
     enabled = config.usageStatus;
     deferToSynthetic = config.deferToSynthetic;
+    refresher.setPlacement(config.usageStatusPlacement ?? "statusBar");
     if (!enabled) {
       refresher.stop(currentContext);
       return;
@@ -262,6 +305,9 @@ export default async function (pi: ExtensionAPI) {
 
   pi.on("session_start", (_event, ctx) => {
     currentContext = ctx;
+    refresher.setPlacement(
+      configLoader.getConfig().usageStatusPlacement ?? "statusBar",
+    );
     if (!enabled) {
       refresher.stop(ctx);
       return;
@@ -306,9 +352,11 @@ export default async function (pi: ExtensionAPI) {
     }
   });
 
+  // Register regardless of the enabled flag: registration means "pi loaded
+  // this sub-extension", which is what makes the feature toggleable in
+  // /usage:settings. Gating on the flag here prevented re-enabling a feature
+  // that was disabled at startup.
   unsubscribeEventBusListeners.push(pi.events.on(USAGE_EXTENSIONS_REQUEST_EVENT, () => {
-    if (configLoader.getConfig().usageStatus) {
-      pi.events.emit(USAGE_EXTENSIONS_REGISTER_EVENT, { feature: "usageStatus" });
-    }
+    pi.events.emit(USAGE_EXTENSIONS_REGISTER_EVENT, { feature: "usageStatus" });
   }));
 }

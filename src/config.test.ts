@@ -61,4 +61,51 @@ describe("usage settings", () => {
       "Combined usage command: enabled (not loaded)",
     );
   });
+
+  it("cycles usage status placement without toggling usage status", async () => {
+    const commands = new Map<string, any>();
+    registerUsageSettings(
+      {
+        registerCommand(name: string, command: any) {
+          commands.set(name, command);
+        },
+      } as any,
+      () => new Set(),
+    );
+
+    const seen: string[][] = [];
+    let phase = 0;
+    const ctx = {
+      cwd: home,
+      ui: {
+        select: async (_title: string, choices: string[]) => {
+          seen.push(choices);
+          if (phase === 0) {
+            phase += 1;
+            return "global";
+          }
+          if (phase === 1) {
+            phase += 1;
+            return choices.find((choice) =>
+              choice.startsWith("Usage status placement:"),
+            );
+          }
+          return "Cancel";
+        },
+        notify: () => {},
+      },
+    };
+
+    await commands.get("usage:settings").handler("", ctx);
+
+    const after = seen[seen.length - 1];
+    // Selecting the placement entry must advance placement and must not touch
+    // the separate usageStatus toggle.
+    expect(
+      after.find((choice) => choice.startsWith("Usage status placement:")),
+    ).toBe("Usage status placement: aboveEditor");
+    expect(after.find((choice) => choice.startsWith("Usage status:"))).toBe(
+      "Usage status: enabled (not loaded)",
+    );
+  });
 });

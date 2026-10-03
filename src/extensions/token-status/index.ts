@@ -231,11 +231,11 @@ export default async function (pi: ExtensionAPI) {
     refresher.stop(ctx);
   });
 
+  // Register regardless of the enabled flag so /usage:settings can re-enable
+  // a feature that was disabled at startup.
   pi.events.on(USAGE_EXTENSIONS_REQUEST_EVENT, () => {
-    if (configLoader.getConfig().tokenStatus) {
-      pi.events.emit(USAGE_EXTENSIONS_REGISTER_EVENT, {
-        feature: "tokenStatus",
-      });
-    }
+    pi.events.emit(USAGE_EXTENSIONS_REGISTER_EVENT, {
+      feature: "tokenStatus",
+    });
   });
 }

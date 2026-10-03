@@ -155,11 +155,11 @@ export default async function (pi: ExtensionAPI) {
     clearAlertState();
   });
 
+  // Register regardless of the enabled flag so /usage:settings can re-enable
+  // a feature that was disabled at startup.
   pi.events.on(USAGE_EXTENSIONS_REQUEST_EVENT, () => {
-    if (configLoader.getConfig().quotaWarnings) {
-      pi.events.emit(USAGE_EXTENSIONS_REGISTER_EVENT, {
-        feature: "quotaWarnings",
-      });
-    }
+    pi.events.emit(USAGE_EXTENSIONS_REGISTER_EVENT, {
+      feature: "quotaWarnings",
+    });
   });
 }

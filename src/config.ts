@@ -9,10 +9,21 @@ export type UsageFeatureId =
   | "usageCommand"
   | "providerCommands"
   | "usageStatus"
+  | "usageStatusPlacement"
   | "tokenStatus"
   | "quotaWarnings"
   | "deferToSynthetic"
   | "hideUnconfiguredProviders";
+
+/**
+ * Where the usage status renders. `statusBar` uses the shared footer status
+ * channel; `aboveEditor`/`belowEditor` use a dedicated widget line, which
+ * avoids collisions with other extensions in the shared status row.
+ */
+export type UsageStatusPlacement =
+  | "statusBar"
+  | "aboveEditor"
+  | "belowEditor";
 
 export const USAGE_EXTENSIONS_REQUEST_EVENT =
   "usage:extensions:request" as const;
@@ -29,6 +40,8 @@ export interface UsageConfig {
   usageCommand?: boolean;
   providerCommands?: boolean;
   usageStatus?: boolean;
+  /** Where the usage status renders (defaults to the shared footer `statusBar`). */
+  usageStatusPlacement?: UsageStatusPlacement;
   tokenStatus?: boolean;
   quotaWarnings?: boolean;
   /** When true and pi-synthetic's usage footer is active, hide pi-usage's Synthetic footer. */
@@ -42,6 +55,7 @@ export interface ResolvedUsageConfig {
   usageCommand: boolean;
   providerCommands: boolean;
   usageStatus: boolean;
+  usageStatusPlacement: UsageStatusPlacement;
   tokenStatus: boolean;
   quotaWarnings: boolean;
   deferToSynthetic: boolean;
@@ -53,6 +67,7 @@ const DEFAULT_CONFIG: ResolvedUsageConfig = {
   usageCommand: true,
   providerCommands: true,
   usageStatus: true,
+  usageStatusPlacement: "statusBar",
   tokenStatus: true,
   quotaWarnings: true,
   deferToSynthetic: true,
@@ -92,6 +107,11 @@ class UsageConfigStore {
       providerCommands:
         input?.providerCommands ?? DEFAULT_CONFIG.providerCommands,
       usageStatus: input?.usageStatus ?? DEFAULT_CONFIG.usageStatus,
+      usageStatusPlacement:
+        input?.usageStatusPlacement === "aboveEditor" ||
+        input?.usageStatusPlacement === "belowEditor"
+          ? input.usageStatusPlacement
+          : DEFAULT_CONFIG.usageStatusPlacement,
       tokenStatus: input?.tokenStatus ?? DEFAULT_CONFIG.tokenStatus,
       quotaWarnings: input?.quotaWarnings ?? DEFAULT_CONFIG.quotaWarnings,
       deferToSynthetic:
@@ -186,6 +206,12 @@ const FEATURE_META: Array<{
     description: "Toggle footer quota status for the active provider",
   },
   {
+    id: "usageStatusPlacement",
+    label: "Usage status placement",
+    description:
+      "Render usage status in the shared footer bar, or on its own line above/below the editor",
+  },
+  {
     id: "tokenStatus",
     label: "Token usage status",
     description: "Toggle the footer token-usage status and /tokens command",
@@ -216,7 +242,14 @@ const FEATURE_META: Array<{
 const NON_LOADABLE_FEATURES = new Set<UsageFeatureId>([
   "deferToSynthetic",
   "hideUnconfiguredProviders",
+  "usageStatusPlacement",
 ]);
+
+const USAGE_STATUS_PLACEMENTS: UsageStatusPlacement[] = [
+  "statusBar",
+  "aboveEditor",
+  "belowEditor",
+];
 
 export function registerUsageSettings(
   pi: ExtensionAPI,
@@ -243,8 +276,13 @@ export function registerUsageSettings(
             NON_LOADABLE_FEATURES.has(feature.id) ||
             getLoadedFeatures().has(feature.id);
           const loaded = registered ? "" : " (not loaded)";
-          const enabled = draft[feature.id] ? "enabled" : "disabled";
-          return `${feature.label}: ${enabled}${loaded}`;
+          const value =
+            feature.id === "usageStatusPlacement"
+              ? draft.usageStatusPlacement
+              : draft[feature.id]
+                ? "enabled"
+                : "disabled";
+          return `${feature.label}: ${value}${loaded}`;
         });
         choices.push("Save and exit", "Cancel");
 
@@ -261,7 +299,7 @@ export function registerUsageSettings(
         }
 
         const feature = FEATURE_META.find((item) =>
-          selected.startsWith(item.label),
+          selected.startsWith(`${item.label}:`),
         );
         if (!feature) continue;
         if (
@@ -274,9 +312,19 @@ export function registerUsageSettings(
           );
           continue;
         }
-        (draft as unknown as Record<string, boolean>)[feature.id] = !(
-          draft as unknown as Record<string, boolean>
-        )[feature.id];
+        if (feature.id === "usageStatusPlacement") {
+          const index = USAGE_STATUS_PLACEMENTS.indexOf(
+            draft.usageStatusPlacement,
+          );
+          draft.usageStatusPlacement =
+            USAGE_STATUS_PLACEMENTS[
+              (index + 1) % USAGE_STATUS_PLACEMENTS.length
+            ];
+        } else {
+          (draft as unknown as Record<string, boolean>)[feature.id] = !(
+            draft as unknown as Record<string, boolean>
+          )[feature.id];
+        }
       }
     },
   });

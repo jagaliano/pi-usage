@@ -1,7 +1,21 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import usageStatusExtension from "./index.js";
 import { fetchProviderQuotas } from "../../lib/quotas.js";
+import { configLoader } from "../../config.js";
+
+const BASE_CONFIG = {
+  configVersion: "test",
+  usageCommand: true,
+  providerCommands: true,
+  usageStatus: true,
+  usageStatusPlacement: "statusBar" as const,
+  tokenStatus: true,
+  quotaWarnings: true,
+  deferToSynthetic: true,
+  hideUnconfiguredProviders: true,
+};
 
 vi.mock("../../config.js", () => ({
   USAGE_CONFIG_UPDATED_EVENT: "usage:config:updated",
@@ -14,8 +28,11 @@ vi.mock("../../config.js", () => ({
       usageCommand: true,
       providerCommands: true,
       usageStatus: true,
+      usageStatusPlacement: "statusBar",
+      tokenStatus: true,
       quotaWarnings: true,
       deferToSynthetic: true,
+      hideUnconfiguredProviders: true,
     })),
   },
 }));
@@ -75,13 +92,17 @@ function createFakePi() {
   };
 }
 
-function createContext(provider: string) {
+function createContext(provider: string, mode: "tui" | "rpc" = "tui") {
   let stale = false;
   const setStatus = vi.fn(() => {
     if (stale) throw new Error(STALE_CONTEXT_ERROR);
   });
+  const setWidget = vi.fn(() => {
+    if (stale) throw new Error(STALE_CONTEXT_ERROR);
+  });
 
   const ctx = {
+    mode,
     get hasUI() {
       if (stale) throw new Error(STALE_CONTEXT_ERROR);
       return true;
@@ -94,6 +115,7 @@ function createContext(provider: string) {
     ui: {
       theme: { fg: (_color: string, text: string) => text },
       setStatus,
+      setWidget,
     },
   } as unknown as ExtensionContext;
 
@@ -103,8 +125,25 @@ function createContext(provider: string) {
       stale = true;
     },
     setStatus,
+    setWidget,
   };
 }
+
+function quotaWindow(): Record<string, unknown> {
+  return {
+    provider: "anthropic",
+    label: "Credits",
+    usedPercent: 25,
+    resetsAt: new Date(Date.now() + 60 * 60 * 1000),
+    windowSeconds: 3600,
+    usedValue: 25,
+    limitValue: 100,
+  };
+}
+
+beforeEach(() => {
+  vi.mocked(configLoader.getConfig).mockReturnValue({ ...BASE_CONFIG });
+});
 
 afterEach(() => {
   vi.useRealTimers();
@@ -178,5 +217,185 @@ describe("usage-status extension lifecycle", () => {
     const last = calls[calls.length - 1]?.[1];
     expect(last).toBeUndefined();
     expect(calls.some((c) => c[1] === "usage unavailable")).toBe(false);
+  });
+
+  it("renders in the shared status row by default", async () => {
+    vi.useFakeTimers();
+    vi.mocked(fetchProviderQuotas).mockResolvedValueOnce({
+      success: true,
+      data: { provider: "anthropic", windows: [quotaWindow()] },
+    } as any);
+
+    const { pi, emitExtensionEvent } = createFakePi();
+    const { ctx, setStatus, setWidget } = createContext("anthropic");
+
+    await usageStatusExtension(pi);
+    await emitExtensionEvent("session_start", ctx);
+    await vi.advanceTimersByTimeAsync(0);
+
+    const calls = setStatus.mock.calls as unknown as Array<[string, string | undefined]>;
+    const last = calls[calls.length - 1]?.[1];
+    expect(typeof last).toBe("string");
+    expect(last).toContain("credits:");
+    expect(setWidget).toHaveBeenCalledWith("pi-usage", undefined);
+  });
+
+  it("renders on a dedicated widget line when placement is aboveEditor", async () => {
+    vi.useFakeTimers();
+    vi.mocked(configLoader.getConfig).mockReturnValue({
+      ...BASE_CONFIG,
+      usageStatusPlacement: "aboveEditor",
+    });
+    vi.mocked(fetchProviderQuotas).mockResolvedValueOnce({
+      success: true,
+      data: { provider: "anthropic", windows: [quotaWindow()] },
+    } as any);
+
+    const { pi, emitExtensionEvent } = createFakePi();
+    const { ctx, setStatus, setWidget } = createContext("anthropic");
+
+    await usageStatusExtension(pi);
+    await emitExtensionEvent("session_start", ctx);
+    await vi.advanceTimersByTimeAsync(0);
+
+    // Shared status row must stay clear so other extensions are not displaced.
+    const calls = setStatus.mock.calls as unknown as Array<[string, string | undefined]>;
+    expect(calls.every((call) => call[1] === undefined)).toBe(true);
+
+    const widgetCall = (setWidget.mock.calls as any[]).find(
+      (call) => typeof call[1] === "function",
+    );
+    expect(widgetCall?.[2]).toEqual({ placement: "aboveEditor" });
+
+    const component = widgetCall[1]();
+    const lines = component.render(80);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain("credits:");
+  });
+
+  it("clears the widget when placement returns to statusBar", async () => {
+    vi.useFakeTimers();
+    vi.mocked(configLoader.getConfig).mockReturnValue({
+      ...BASE_CONFIG,
+      usageStatusPlacement: "aboveEditor",
+    });
+    vi.mocked(fetchProviderQuotas).mockResolvedValue({
+      success: true,
+      data: { provider: "anthropic", windows: [quotaWindow()] },
+    } as any);
+
+    const { pi, emitExtensionEvent, emitBusEvent } = createFakePi();
+    const { ctx, setStatus, setWidget } = createContext("anthropic");
+
+    await usageStatusExtension(pi);
+    await emitExtensionEvent("session_start", ctx);
+    await vi.advanceTimersByTimeAsync(0);
+
+    // A widget must have been installed while in aboveEditor mode.
+    const installed = (setWidget.mock.calls as any[]).some(
+      (call) =>
+        typeof call[1] === "function" &&
+        call[2]?.placement === "aboveEditor",
+    );
+    expect(installed).toBe(true);
+
+    // Switch back to the shared status row and prove the widget is removed.
+    // Keep the loader mock stale (still aboveEditor) and change only the event
+    // payload: this is what proves placement is read from the event rather than
+    // from a stale config-store snapshot.
+    setWidget.mockClear();
+    emitBusEvent("usage:config:updated", { config: { ...BASE_CONFIG } });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(setWidget).toHaveBeenCalledWith("pi-usage", undefined);
+    const statusCalls = setStatus.mock.calls as unknown as Array<
+      [string, string | undefined]
+    >;
+    expect(
+      statusCalls.some(
+        (call) => typeof call[1] === "string" && call[1].includes("credits:"),
+      ),
+    ).toBe(true);
+  });
+
+  it("falls back to the shared status row in non-TUI modes", async () => {
+    vi.useFakeTimers();
+    vi.mocked(configLoader.getConfig).mockReturnValue({
+      ...BASE_CONFIG,
+      usageStatusPlacement: "aboveEditor",
+    });
+    vi.mocked(fetchProviderQuotas).mockResolvedValueOnce({
+      success: true,
+      data: { provider: "anthropic", windows: [quotaWindow()] },
+    } as any);
+
+    const { pi, emitExtensionEvent } = createFakePi();
+    const { ctx, setStatus, setWidget } = createContext("anthropic", "rpc");
+
+    await usageStatusExtension(pi);
+    await emitExtensionEvent("session_start", ctx);
+    await vi.advanceTimersByTimeAsync(0);
+
+    // No widget factory in RPC mode; the status must still reach setStatus.
+    expect(
+      (setWidget.mock.calls as any[]).some(
+        (call) => typeof call[1] === "function",
+      ),
+    ).toBe(false);
+    const statusCalls = setStatus.mock.calls as unknown as Array<
+      [string, string | undefined]
+    >;
+    expect(
+      statusCalls.some(
+        (call) => typeof call[1] === "string" && call[1].includes("credits:"),
+      ),
+    ).toBe(true);
+  });
+
+  it("never renders wider than the requested widget width", async () => {
+    vi.useFakeTimers();
+    vi.mocked(configLoader.getConfig).mockReturnValue({
+      ...BASE_CONFIG,
+      usageStatusPlacement: "aboveEditor",
+    });
+    vi.mocked(fetchProviderQuotas).mockResolvedValue({
+      success: true,
+      data: { provider: "anthropic", windows: [quotaWindow()] },
+    } as any);
+
+    const { pi, emitExtensionEvent } = createFakePi();
+    const { ctx, setWidget } = createContext("anthropic");
+
+    await usageStatusExtension(pi);
+    await emitExtensionEvent("session_start", ctx);
+    await vi.advanceTimersByTimeAsync(0);
+
+    const widgetCall = (setWidget.mock.calls as any[]).find(
+      (call) => typeof call[1] === "function",
+    );
+    const component = widgetCall[1]();
+    for (const width of [0, 1, 5, 40, 200]) {
+      for (const line of component.render(width)) {
+        expect(visibleWidth(line)).toBeLessThanOrEqual(Math.max(0, width));
+      }
+    }
+  });
+
+  it("self-registers while enabled is false so settings can re-enable it", async () => {
+    vi.mocked(configLoader.getConfig).mockReturnValue({
+      ...BASE_CONFIG,
+      usageStatus: false,
+    });
+
+    const { pi, emitBusEvent } = createFakePi();
+    const registered: Array<{ feature: string }> = [];
+    pi.events.on("usage:extensions:register", (data: unknown) => {
+      registered.push(data as { feature: string });
+    });
+
+    await usageStatusExtension(pi);
+    emitBusEvent("usage:extensions:request", undefined);
+
+    expect(registered).toContainEqual({ feature: "usageStatus" });
   });
 });

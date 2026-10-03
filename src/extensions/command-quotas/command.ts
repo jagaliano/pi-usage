@@ -161,12 +161,11 @@ export default async function (pi: ExtensionAPI) {
     registerUsageCommands(pi);
   }
 
+  // Register regardless of the enabled flag so /usage:settings can toggle
+  // command visibility in both directions. The command handlers still check
+  // the config at call time.
   pi.events.on(USAGE_EXTENSIONS_REQUEST_EVENT, () => {
-    if (configLoader.getConfig().usageCommand) {
-      pi.events.emit(USAGE_EXTENSIONS_REGISTER_EVENT, { feature: "usageCommand" });
-    }
-    if (configLoader.getConfig().providerCommands) {
-      pi.events.emit(USAGE_EXTENSIONS_REGISTER_EVENT, { feature: "providerCommands" });
-    }
+    pi.events.emit(USAGE_EXTENSIONS_REGISTER_EVENT, { feature: "usageCommand" });
+    pi.events.emit(USAGE_EXTENSIONS_REGISTER_EVENT, { feature: "providerCommands" });
   });
 }

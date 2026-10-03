@@ -55,7 +55,7 @@ Restart or `/reload` to load the extension.
 
 ### Footer status
 
-When the active model is from a supported provider, the Pi footer shows real-time quota headroom refreshed every 60 seconds and on each turn.
+When the active model is from a supported provider, the Pi footer shows real-time quota headroom refreshed every 60 seconds and on each turn. Use the **Usage status placement** setting to keep it in the shared footer row (`statusBar`) or render it on a dedicated line above/below the editor, which avoids collisions with other extensions in the status row.
 
 ### Quota warnings
 
@@ -68,6 +68,7 @@ Automatic warning notifications when usage or the current pace risks exhausting 
 - Combined `/usage` command
 - Per-provider `/...:usage` commands
 - Footer usage status
+- Usage status placement — shared footer bar (default) or a dedicated line above/below the editor
 - Token usage status and `/tokens`
 - Quota warning notifications
 - Defer to Synthetic — hide the Synthetic footer when `pi-synthetic` is also showing usage
