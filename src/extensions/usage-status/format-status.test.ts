@@ -340,6 +340,59 @@ describe("formatWindowStatus", () => {
       expect(formatWindowStatus(theme, w, true)).not.toContain("runs out");
     });
 
+    it("omits the hint when the reset time is in the past", () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date(WINDOW_START));
+      const w: WindowStatus = {
+        label: "5h",
+        usedPercent: 90,
+        severity: "critical",
+        resetsAt: "2026-05-06T04:00:00Z",
+        limited: false,
+        usedValue: 90,
+        limitValue: 100,
+        windowSeconds: 5 * 60 * 60,
+      };
+      expect(formatWindowStatus(theme, w, true)).not.toContain("runs out");
+    });
+
+    it("omits the hint when usage exactly matches elapsed time", () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date(WINDOW_START));
+      const w: WindowStatus = {
+        label: "5h",
+        usedPercent: 50,
+        severity: "warning",
+        // 2.5h remaining of a 5h window => 50% elapsed.
+        resetsAt: "2026-05-06T07:30:00Z",
+        limited: false,
+        usedValue: 50,
+        limitValue: 100,
+        windowSeconds: 5 * 60 * 60,
+      };
+      expect(formatWindowStatus(theme, w, true)).not.toContain("runs out");
+    });
+
+    it("ignores paceScale when estimating exhaustion", () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date(WINDOW_START));
+      // OpenCode Go-style weekly window: paceScale distorts the assessment
+      // pace, but the hint must use physical elapsed time only. 50% elapsed and
+      // 50% used must therefore produce no hint.
+      const status = toWindowStatus({
+        provider: "opencode-go",
+        label: "Weekly",
+        usedPercent: 50,
+        resetsAt: new Date("2026-05-09T17:00:00Z"),
+        windowSeconds: 7 * 24 * 60 * 60,
+        usedValue: 50,
+        limitValue: 100,
+        showPace: true,
+        paceScale: 1 / 7,
+      });
+      expect(formatWindowStatus(theme, status, true)).not.toContain("runs out");
+    });
+
     it("prepends a severity glyph only in detailed mode", () => {
       const windows: WindowStatus[] = [
         {
