@@ -46,6 +46,22 @@ function storedCredential(provider: string): unknown {
 }
 
 /**
+ * True when `auth.json` holds a non-empty credential for the provider.
+ *
+ * Used to decide whether a provider is configured without performing any
+ * network I/O, so it stays safe to call during extension load.
+ */
+export function hasStoredCredential(provider: string): boolean {
+  const credential = storedCredential(provider);
+  if (credential === undefined || credential === null) return false;
+  if (typeof credential === "string") return credential.trim().length > 0;
+  if (typeof credential === "object") {
+    return Object.keys(credential as Record<string, unknown>).length > 0;
+  }
+  return false;
+}
+
+/**
  * Support both upstream Pi's legacy `modelRegistry.authStorage` API and
  * newer Pi distributions that expose resolved provider auth through methods.
  */
