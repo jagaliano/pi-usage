@@ -650,6 +650,19 @@ describe("fetchCommandCodeQuotas", () => {
     expect(result.error.message).toContain("Command Code");
   });
 
+  it("prefers COMMAND_CODE_API_KEY over the stored credential", async () => {
+    await stubEmptyHome();
+    vi.stubEnv("COMMAND_CODE_API_KEY", "sk-env");
+    const fetchSpy = mockAccountFetch();
+
+    const result = await fetchCommandCodeQuotas(
+      inMemoryAuthStorage({ commandcode: { apiKey: "sk-stored" } }),
+    );
+
+    expect(result).toMatchObject({ success: true });
+    expect(authorizationFromCall(fetchSpy.mock.calls[0])).toBe("Bearer sk-env");
+  });
+
   it("ignores a placeholder stored key and falls back to the environment", async () => {
     await stubEmptyHome();
     vi.stubEnv("COMMAND_CODE_API_KEY", "sk-env");

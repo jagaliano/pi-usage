@@ -495,13 +495,16 @@ export async function fetchCommandCodeQuotas(
   authStorage: AuthStorage,
   signal?: AbortSignal,
 ): Promise<QuotasResult> {
-  // Prefer the key stored via `pi /login` (auth.json), then the
-  // COMMAND_CODE_API_KEY env var, then an auth file fallback. Normalize the
-  // stored value: a host may hand back a literal env-var name, not a key.
-  let apiKey = normalizeCommandCodeApiKey(
-    await providerAccessToken(authStorage, "commandcode"),
-  );
-  if (!apiKey) apiKey = resolveCommandCodeApiKeyFromEnv()?.apiKey;
+  // Precedence: the COMMAND_CODE_API_KEY / COMMANDCODE_API_KEY env override,
+  // then the key stored via `pi /login` (auth.json), then an auth file
+  // fallback — env-overrides-stored, matching the other providers. Normalize
+  // the stored value: a host may hand back a literal env-var name, not a key.
+  let apiKey = resolveCommandCodeApiKeyFromEnv()?.apiKey;
+  if (!apiKey) {
+    apiKey = normalizeCommandCodeApiKey(
+      await providerAccessToken(authStorage, "commandcode"),
+    );
+  }
 
   if (!apiKey) {
     const fileResult = await resolveCommandCodeApiKeyFromFilesCached();
