@@ -32,6 +32,8 @@ describe("isProviderConfigured", () => {
       ["kimi-coding", { KIMI_API_KEY: "k" } as NodeJS.ProcessEnv],
       ["ollama-cloud", { OLLAMA_API_KEY: "k" } as NodeJS.ProcessEnv],
       ["minimax", { MINIMAX_API_KEY: "k" } as NodeJS.ProcessEnv],
+      ["commandcode", { COMMAND_CODE_API_KEY: "k" } as NodeJS.ProcessEnv],
+      ["commandcode", { COMMANDCODE_API_KEY: "k" } as NodeJS.ProcessEnv],
       ["github-copilot", { COPILOT_GITHUB_TOKEN: "k" } as NodeJS.ProcessEnv],
     ];
     for (const [provider, env] of cases) {
@@ -105,6 +107,29 @@ describe("isProviderConfigured", () => {
         fileExists: (path) => path.endsWith("opencode/auth.json"),
       }),
     ).toBe(true);
+    expect(
+      isProviderConfigured("commandcode", {
+        ...EMPTY,
+        fileExists: (path) => path.endsWith(".commandcode/auth.json"),
+      }),
+    ).toBe(true);
+    expect(
+      isProviderConfigured("commandcode", {
+        ...EMPTY,
+        fileExists: (path) => path.endsWith(".omp/agent/auth.json"),
+      }),
+    ).toBe(true);
+  });
+
+  it("does not treat the removed OPENCODE_GO_WORKSPACE_ID as a credential", () => {
+    // Dashboard scraping was removed in #1; the workspace ID no longer
+    // authenticates anything and must not keep /opencode-go:usage visible.
+    expect(
+      isProviderConfigured("opencode-go", {
+        ...EMPTY,
+        env: { OPENCODE_GO_WORKSPACE_ID: "wrk_1" } as NodeJS.ProcessEnv,
+      }),
+    ).toBe(false);
   });
 
   it("does not treat unrelated files as credentials for env-only providers", () => {

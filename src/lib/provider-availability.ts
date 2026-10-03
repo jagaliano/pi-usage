@@ -31,13 +31,11 @@ const PROVIDER_ENV_VARS: Record<SupportedQuotaProvider, readonly string[]> = {
   synthetic: ["SYNTHETIC_API_KEY"],
   xai: ["XAI_API_KEY"],
   zai: ["ZAI_API_KEY"],
-  // OPENCODE_GO_* predates the usage API; still a signal that the provider is
-  // configured. OPENCODE_API_KEY is what pi-ai reads for opencode-go.
-  "opencode-go": [
-    "OPENCODE_API_KEY",
-    "OPENCODE_GO_API_KEY",
-    "OPENCODE_GO_WORKSPACE_ID",
-  ],
+  // OPENCODE_API_KEY is what pi-ai reads for opencode-go; OPENCODE_GO_API_KEY
+  // is this package's Go-specific override. The legacy OPENCODE_GO_WORKSPACE_ID
+  // no longer authenticates anything (dashboard scraping was removed), so it
+  // is deliberately absent.
+  "opencode-go": ["OPENCODE_API_KEY", "OPENCODE_GO_API_KEY"],
   "kimi-coding": ["KIMI_API_KEY"],
   "ollama-cloud": ["OLLAMA_API_KEY"],
   minimax: ["MINIMAX_API_KEY"],
