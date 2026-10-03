@@ -1283,6 +1283,7 @@ describe("parseCommandCodeUsage", () => {
       usedValue: 5,
       limitValue: 5,
       isBalance: true,
+      limited: false,
       showPace: false,
     });
     expect(windows[1].nextLabel).toBeUndefined();
@@ -1325,6 +1326,7 @@ describe("parseCommandCodeUsage", () => {
       usedValue: 0,
       limitValue: 0,
       isBalance: true,
+      limited: true,
     });
   });
 
@@ -1343,6 +1345,11 @@ describe("parseCommandCodeUsage", () => {
     });
 
     expect(windows.map((w) => w.label)).toEqual(["Credits Remaining"]);
-    expect(windows[0]).toMatchObject({ usedValue: 0, limitValue: 0, isBalance: true });
+    expect(windows[0]).toMatchObject({
+      usedValue: 0,
+      limitValue: 0,
+      isBalance: true,
+      limited: true,
+    });
   });
 });

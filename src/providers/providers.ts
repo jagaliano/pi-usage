@@ -1065,6 +1065,9 @@ export function parseCommandCodeUsage(data: CommandCodeQuota): QuotaWindow[] {
 
   // The remaining credit pool only makes sense as a "total" once we know what
   // has been spent this billing period, so require both credits and summary.
+  // Known drift: the API does not report the period's starting budget, so a
+  // mid-period credit purchase inflates the pool retroactively and the used
+  // percent drops without any usage change.
   const remaining = credits?.remainingCredits ?? 0;
   const spent = summary?.totalCost ?? 0;
   const pool = remaining + spent;
@@ -1098,6 +1101,9 @@ export function parseCommandCodeUsage(data: CommandCodeQuota): QuotaWindow[] {
       isCurrency: true,
       isBalance: true,
       showPace: false,
+      // A known-empty balance is the one balance state worth escalating:
+      // without it, $0 remaining renders with the calmest severity.
+      limited: remaining === 0,
       ...(periodEnd ? { nextLabel: "Renews" } : {}),
     });
   }

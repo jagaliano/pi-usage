@@ -11,9 +11,9 @@
  *   GET /alpha/usage/summary?orgId=<org>&since=<periodStart>
  *   Authorization: Bearer <Command Code API key>
  *
- * Configuration:
- * - Pi auth entry: `pi /login` → Command Code (preferred)
+ * Configuration (in precedence order):
  * - Environment: COMMAND_CODE_API_KEY or COMMANDCODE_API_KEY
+ * - Pi auth entry: `pi /login` → Command Code
  * - Auth files: ~/.commandcode/auth.json, ~/.omp/agent/auth.json
  */
 
