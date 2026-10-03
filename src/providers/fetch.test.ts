@@ -889,6 +889,30 @@ describe("fetchOpenCodeGoQuotas", () => {
     expect(authorizationFromCall(fetchSpy.mock.calls[0])).toBe("Bearer sk-pi-env");
   });
 
+  it("never sends a resolved OAuth token to the Go endpoint", async () => {
+    await stubEmptyHome();
+    const fetchSpy = vi.fn();
+    globalThis.fetch = fetchSpy as unknown as typeof fetch;
+
+    // An auth storage whose resolved lookup would return (and refresh) the
+    // stored OAuth access token: the resolved fallback must be skipped, so
+    // with no other key source this is a config error, not a Zen-token call.
+    const oauthResolvingStorage = {
+      get: () => ({
+        type: "oauth",
+        access: "zen-oauth-access",
+        refresh: "zen-oauth-refresh",
+        expires: Date.now() + 60_000,
+      }),
+      getApiKey: async () => "zen-oauth-access",
+    };
+
+    const result = await fetchOpenCodeGoQuotas(oauthResolvingStorage);
+
+    expect(result).toMatchObject({ success: false, error: { kind: "config" } });
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
   it("does not leak OpenCode CLI auth-file contents in a config error", async () => {
     const home = await stubEmptyHome();
     await mkdir(join(home, ".local", "share", "opencode"), { recursive: true });

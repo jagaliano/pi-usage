@@ -21,7 +21,7 @@ pi /login minimax
 # paste MINIMAX_API_KEY (or set MINIMAX_API_KEY env var)
 ```
 
-OpenCode Go quotas come from the official `https://opencode.ai/zen/go/v1/usage` endpoint and read the API key from `pi /login opencode-go` (`auth.json`), then `OPENCODE_GO_API_KEY`, then `OPENCODE_API_KEY` (the shared variable Pi's own opencode-go provider authenticates with), then a `apiKey` field in `~/.config/opencode/opencode-quota/opencode-go.json` or the OpenCode CLI `~/.local/share/opencode/auth.json`. The old `workspaceId`/`authCookie` dashboard scraping is no longer supported.
+OpenCode Go quotas come from the official `https://opencode.ai/zen/go/v1/usage` endpoint and read the API key from `OPENCODE_GO_API_KEY`, then `pi /login opencode-go` (`auth.json`), then `OPENCODE_API_KEY` (the shared variable Pi's own opencode-go provider authenticates with), then a `apiKey` field in `~/.config/opencode/opencode-quota/opencode-go.json` or the OpenCode CLI `~/.local/share/opencode/auth.json`. The old `workspaceId`/`authCookie` dashboard scraping is no longer supported.
 
 Command Code usage comes from the Command Code API (`https://api.commandcode.ai`) and reads the API key from `pi /login` (select Command Code), then `COMMAND_CODE_API_KEY` / `COMMANDCODE_API_KEY`, then `~/.commandcode/auth.json` or `~/.omp/agent/auth.json`.
 

@@ -82,6 +82,30 @@ function storedProviderApiKey(
 }
 
 /**
+ * True when the stored credential is OAuth-shaped (`access`/`refresh`/
+ * `expires`) with no API-key fields. Pi's resolved lookup would return — and
+ * refresh — that same OAuth token, which for opencode-go is Zen-scoped rather
+ * than a Go API key, so the resolved fallback must be skipped in that case.
+ */
+function hasOAuthOnlyStoredCredential(
+  authStorage: AuthStorage,
+  provider: string,
+): boolean {
+  const credential = authStorage.get(provider);
+  if (!credential || typeof credential !== "object" || Array.isArray(credential)) {
+    return false;
+  }
+  const record = credential as Record<string, unknown>;
+  const hasKeyField = ["key", "apiKey"].some(
+    (field) => typeof record[field] === "string" && record[field].trim(),
+  );
+  const access = record.access;
+  return (
+    !hasKeyField && typeof access === "string" && access.trim().length > 0
+  );
+}
+
+/**
  * Detect a raw Anthropic API key. OAuth subscription tokens use the
  * `sk-ant-oat` prefix, while direct API keys use `sk-ant-api`.
  */
@@ -472,7 +496,12 @@ export async function fetchOpenCodeGoQuotas(
   let apiKey = process.env.OPENCODE_GO_API_KEY?.trim() || undefined;
   if (!apiKey) apiKey = storedProviderApiKey(authStorage, "opencode-go");
   if (!apiKey) apiKey = resolveOpenCodeGoApiKeyFromEnv()?.apiKey;
-  if (!apiKey) apiKey = await providerAccessToken(authStorage, "opencode-go");
+  // Skip the resolved lookup when the stored credential is OAuth-shaped: it
+  // would resolve (and refresh) that same Zen-scoped OAuth token, which is
+  // not a Go API key.
+  if (!apiKey && !hasOAuthOnlyStoredCredential(authStorage, "opencode-go")) {
+    apiKey = await providerAccessToken(authStorage, "opencode-go");
+  }
 
   if (!apiKey) {
     const fileResult = await resolveOpenCodeGoApiKeyFromFilesCached();

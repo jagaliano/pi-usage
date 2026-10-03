@@ -114,6 +114,25 @@ describe("quota warning UX", () => {
     );
   });
 
+  it("never claims an unknown reset time is now", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-07T12:00:00Z"));
+    // A zero resetsAt means "reset time unknown" (e.g. an exhausted balance
+    // with no billing period end), not "resets immediately".
+    mockWindows([makeWindow({ resetsAt: new Date(0) })]);
+    const { pi, emit } = createFakePi();
+    const { ctx, notify } = createContext();
+
+    await quotaWarningsExtension(pi);
+    await emit("session_start", ctx);
+
+    expect(notify).toHaveBeenCalledOnce();
+    expect(notify).toHaveBeenCalledWith(
+      "MiniMax quota warning:\n- general: limit reached",
+      "warning",
+    );
+  });
+
   it("does not repeat critical warnings on every turn", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-09-07T12:00:00Z"));

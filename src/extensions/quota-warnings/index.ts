@@ -88,18 +88,25 @@ export default async function (pi: ExtensionAPI) {
     const providerName = PROVIDER_LABELS[provider];
 
     const lines = toNotify.map(({ window, assessment }) => {
-      const resetsIn = formatTimeRemaining(window.resetsAt);
+      // A zero resetsAt means "reset time unknown" — never claim it resets now.
+      const hasReset = window.resetsAt.getTime() > 0;
+      const resetsIn = hasReset
+        ? `; resets in ${formatTimeRemaining(window.resetsAt)}`
+        : "";
       if (window.limited || window.usedPercent >= 100) {
-        return `- ${window.label}: limit reached; resets in ${resetsIn}`;
+        return `- ${window.label}: limit reached${resetsIn}`;
       }
 
       const used = Math.round(window.usedPercent);
       if (assessment.pacePercent === null) {
-        return `- ${window.label}: ${used}% used; resets in ${resetsIn} (${assessment.severity} risk)`;
+        return `- ${window.label}: ${used}% used${resetsIn} (${assessment.severity} risk)`;
       }
 
       const projected = Math.round(assessment.projectedPercent);
-      return `- ${window.label}: ${used}% used, projected ${projected}% by reset in ${resetsIn} (${assessment.severity} risk)`;
+      const byReset = hasReset
+        ? ` by reset in ${formatTimeRemaining(window.resetsAt)}`
+        : "";
+      return `- ${window.label}: ${used}% used, projected ${projected}%${byReset} (${assessment.severity} risk)`;
     });
 
     // Quota risk is actionable but is not an extension or API failure. Using
