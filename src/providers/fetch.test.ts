@@ -634,9 +634,23 @@ describe("fetchOpenCodeGoQuotas", () => {
     expect(authorizationFromCall(fetchSpy.mock.calls[0])).toBe("Bearer sk-go-env");
   });
 
-  it("prefers the stored credential over both environment variables", async () => {
+  it("prefers OPENCODE_GO_API_KEY over the stored credential", async () => {
     await stubEmptyHome();
     vi.stubEnv("OPENCODE_GO_API_KEY", "sk-go-env");
+    const fetchSpy = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ usage: { rolling: { percent: 1 } } }), { status: 200 }),
+    );
+    globalThis.fetch = fetchSpy as unknown as typeof fetch;
+
+    await fetchOpenCodeGoQuotas(
+      inMemoryAuthStorage({ "opencode-go": { apiKey: "sk-stored" } }),
+    );
+
+    expect(authorizationFromCall(fetchSpy.mock.calls[0])).toBe("Bearer sk-go-env");
+  });
+
+  it("prefers the stored credential over the generic OPENCODE_API_KEY", async () => {
+    await stubEmptyHome();
     vi.stubEnv("OPENCODE_API_KEY", "sk-pi-env");
     const fetchSpy = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ usage: { rolling: { percent: 1 } } }), { status: 200 }),
@@ -648,6 +662,30 @@ describe("fetchOpenCodeGoQuotas", () => {
     );
 
     expect(authorizationFromCall(fetchSpy.mock.calls[0])).toBe("Bearer sk-stored");
+  });
+
+  it("ignores OAuth-shaped stored credentials (expiring Zen-scoped tokens)", async () => {
+    await stubEmptyHome();
+    // Only the generic variable is set, so the stored OAuth credential is
+    // actually consulted; the expiring Zen-scoped `access` token must not win.
+    vi.stubEnv("OPENCODE_API_KEY", "sk-pi-env");
+    const fetchSpy = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ usage: { rolling: { percent: 1 } } }), { status: 200 }),
+    );
+    globalThis.fetch = fetchSpy as unknown as typeof fetch;
+
+    await fetchOpenCodeGoQuotas(
+      inMemoryAuthStorage({
+        "opencode-go": {
+          type: "oauth",
+          access: "zen-oauth-access",
+          refresh: "zen-oauth-refresh",
+          expires: 1,
+        },
+      }),
+    );
+
+    expect(authorizationFromCall(fetchSpy.mock.calls[0])).toBe("Bearer sk-pi-env");
   });
 
   it("does not leak OpenCode CLI auth-file contents in a config error", async () => {

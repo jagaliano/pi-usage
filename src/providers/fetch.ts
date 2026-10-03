@@ -42,15 +42,22 @@ async function providerAccessToken(
 }
 
 /**
- * Read the *stored* credential for a provider, without falling back to
- * ambient environment variables.
+ * Read the stored *API-key* credential for a provider, without falling back
+ * to ambient environment variables.
+ *
+ * Only API-key shapes are considered: a raw string, or a `key` / `apiKey`
+ * field. OAuth-shaped entries (`access` / `refresh` / `expires`) are
+ * deliberately ignored here: their `access` tokens expire and need the
+ * refresh flow in Pi's resolved lookup, and for opencode-go an OAuth token
+ * is Zen-scoped — handing it to the Go endpoint is exactly the wrong-key
+ * failure this lookup exists to avoid.
  *
  * `authStorage.getApiKey` resolves ambient auth as well: Pi's built-in
  * opencode-go provider authenticates with `OPENCODE_API_KEY`, so a resolved
- * lookup returns that generic variable before this provider ever consults its
- * own `OPENCODE_GO_API_KEY`. Reading the stored credential directly keeps the
- * documented precedence (stored → Go-specific env → generic env → files)
- * honest, and avoids selecting a Zen-scoped key for the Go endpoint.
+ * lookup returns that generic variable before this provider ever consults a
+ * stored Go key. Reading the stored credential directly keeps the documented
+ * precedence (Go-specific env → stored → generic env/resolved → files)
+ * honest.
  */
 function storedProviderApiKey(
   authStorage: AuthStorage,
@@ -60,7 +67,7 @@ function storedProviderApiKey(
   if (typeof credential === "string") return credential.trim() || undefined;
   if (!credential || typeof credential !== "object") return undefined;
   const record = credential as Record<string, unknown>;
-  for (const field of ["key", "apiKey", "access"]) {
+  for (const field of ["key", "apiKey"]) {
     const value = record[field];
     if (typeof value === "string" && value.trim()) return value.trim();
   }
@@ -450,12 +457,13 @@ export async function fetchOpenCodeGoQuotas(
   authStorage: AuthStorage,
   signal?: AbortSignal,
 ): Promise<QuotasResult> {
-  // Precedence: stored `pi /login opencode-go` credential, then the
-  // Go-specific OPENCODE_GO_API_KEY, then the generic OPENCODE_API_KEY (the
-  // variable Pi's own opencode-go provider uses), then a config file / the
-  // OpenCode CLI auth.json. Pi's resolved lookup is kept as a last resort for
-  // auth backends that do not expose the raw stored credential.
-  let apiKey = storedProviderApiKey(authStorage, "opencode-go");
+  // Precedence: the Go-specific OPENCODE_GO_API_KEY override, then the stored
+  // `pi /login opencode-go` API key, then the generic OPENCODE_API_KEY (the
+  // variable Pi's own opencode-go provider uses, also reachable through Pi's
+  // resolved lookup, which additionally covers OAuth backends and refresh),
+  // then a config file / the OpenCode CLI auth.json.
+  let apiKey = process.env.OPENCODE_GO_API_KEY?.trim() || undefined;
+  if (!apiKey) apiKey = storedProviderApiKey(authStorage, "opencode-go");
   if (!apiKey) apiKey = resolveOpenCodeGoApiKeyFromEnv()?.apiKey;
   if (!apiKey) apiKey = await providerAccessToken(authStorage, "opencode-go");
 
