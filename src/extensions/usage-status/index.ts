@@ -25,6 +25,8 @@ import {
 import {
   assessWindow,
   formatTimeRemaining,
+  getSeverityColor,
+  type RiskSeverity,
 } from "../../utils/quotas-severity.js";
 import type { QuotaWindow } from "../../types/quotas.js";
 import { formatWindowStatus, type WindowStatus } from "./format-status.js";
@@ -52,15 +54,43 @@ function formatFooterResetTime(resetsAt: string): string {
   return remaining === "now" ? "now" : `in ${remaining}`;
 }
 
-export function formatStatus(ctx: Pick<ExtensionContext, "ui">, windows: WindowStatus[]): string {
+const SEVERITY_GLYPHS: Record<RiskSeverity, string> = {
+  none: "●",
+  warning: "▲",
+  high: "✕",
+  critical: "✕",
+};
+const SEVERITY_ORDER: RiskSeverity[] = ["none", "warning", "high", "critical"];
+
+/**
+ * Format the status line. When `detailed` (dedicated widget line), prepend a
+ * severity glyph and include pace/exhaustion hints that would not fit in the
+ * shared footer row.
+ */
+export function formatStatus(
+  ctx: Pick<ExtensionContext, "ui">,
+  windows: WindowStatus[],
+  detailed = false,
+): string {
   const theme = ctx.ui.theme;
-  return windows
+  const body = windows
     .map((w) => {
-      const core = formatWindowStatus(theme, w);
+      const core = formatWindowStatus(theme, w, detailed);
       const reset = w.resetsAt ? theme.fg("dim", ` (↺${formatFooterResetTime(w.resetsAt)})`) : "";
       return `${core}${reset}`;
     })
     .join(" ");
+
+  if (!detailed || windows.length === 0) return body;
+
+  const maxSeverity = windows.reduce<RiskSeverity>(
+    (acc, w) =>
+      SEVERITY_ORDER.indexOf(w.severity) > SEVERITY_ORDER.indexOf(acc)
+        ? w.severity
+        : acc,
+    "none",
+  );
+  return `${theme.fg(getSeverityColor(maxSeverity), SEVERITY_GLYPHS[maxSeverity])} ${body}`;
 }
 
 const ANTHROPIC_SUBSCRIPTION_WINDOW_LABELS = new Set([
@@ -79,15 +109,19 @@ function shouldShowInStatus(window: QuotaWindow): boolean {
 }
 
 export function toWindowStatus(window: QuotaWindow): WindowStatus {
+  const assessment = assessWindow(window);
   return {
     label: window.label,
     usedPercent: window.usedPercent,
-    severity: assessWindow(window).severity,
+    severity: assessment.severity,
     resetsAt: window.resetsAt.getTime() > 0 ? window.resetsAt.toISOString() : null,
     limited: window.limited ?? false,
     isCurrency: window.isCurrency,
     usedValue: window.usedValue,
     limitValue: window.limitValue,
+    pacePercent: assessment.pacePercent,
+    projectedPercent: assessment.projectedPercent,
+    windowSeconds: window.windowSeconds,
   };
 }
 
@@ -98,9 +132,10 @@ export function toStatusWindows(windows: QuotaWindow[]): WindowStatus[] {
 export function formatStatusForFooter(
   ctx: Pick<ExtensionContext, "ui">,
   windows: WindowStatus[],
+  detailed = false,
 ): string | undefined {
   if (windows.length === 0) return undefined;
-  return formatStatus(ctx, windows);
+  return formatStatus(ctx, windows, detailed);
 }
 
 function createStatusRefresher() {
@@ -200,7 +235,7 @@ function createStatusRefresher() {
         return;
       }
       const windows: WindowStatus[] = toStatusWindows(result.data.windows);
-      const status = formatStatusForFooter(ctx, windows);
+      const status = formatStatusForFooter(ctx, windows, placement !== "statusBar");
       lastStatus = status === undefined ? undefined : windows;
       setStatusSafely(ctx, status);
     } catch (error) {
@@ -246,7 +281,7 @@ function createStatusRefresher() {
     },
     renderLast(ctx: ExtensionContext): boolean {
       if (!lastStatus) return false;
-      return setStatusSafely(ctx, (ctx) => formatStatusForFooter(ctx, lastStatus ?? []));
+      return setStatusSafely(ctx, (ctx) => formatStatusForFooter(ctx, lastStatus ?? [], placement !== "statusBar"));
     },
   };
 }

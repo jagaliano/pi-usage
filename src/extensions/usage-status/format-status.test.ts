@@ -245,4 +245,75 @@ describe("formatWindowStatus", () => {
     expect(result).toContain("(↺now)");
     expect(result).not.toContain("(↺in now)");
   });
+
+  describe("detailed status (dedicated line)", () => {
+    it("appends time-to-exhaustion when a window runs out before reset", () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-05-06T05:00:00Z"));
+      const w: WindowStatus = {
+        label: "5h",
+        usedPercent: 90,
+        severity: "critical",
+        resetsAt: "2026-05-06T10:00:00Z",
+        limited: false,
+        usedValue: 90,
+        limitValue: 100,
+        pacePercent: 30,
+        projectedPercent: 300,
+        windowSeconds: 5 * 60 * 60,
+      };
+      expect(formatWindowStatus(theme, w, true)).toContain("runs out ~3h 20m");
+    });
+
+    it("omits the exhaustion hint when not projected to exhaust", () => {
+      const w: WindowStatus = {
+        label: "5h",
+        usedPercent: 40,
+        severity: "none",
+        resetsAt: "2026-05-06T10:00:00Z",
+        limited: false,
+        usedValue: 40,
+        limitValue: 100,
+        pacePercent: 80,
+        projectedPercent: 50,
+        windowSeconds: 5 * 60 * 60,
+      };
+      expect(formatWindowStatus(theme, w, true)).not.toContain("runs out");
+    });
+
+    it("prepends a severity glyph only in detailed mode", () => {
+      const windows: WindowStatus[] = [
+        {
+          label: "5h",
+          usedPercent: 85,
+          severity: "warning",
+          resetsAt: null,
+          limited: false,
+          usedValue: 85,
+          limitValue: 100,
+        },
+      ];
+      expect(formatStatus({ ui: { theme } } as any, windows, true)).toContain(
+        "[warning]▲",
+      );
+      expect(formatStatus({ ui: { theme } } as any, windows)).not.toContain("▲");
+    });
+
+    it("uses a safe glyph when all windows are healthy", () => {
+      const windows: WindowStatus[] = [
+        {
+          label: "5h",
+          usedPercent: 10,
+          severity: "none",
+          resetsAt: null,
+          limited: false,
+          usedValue: 10,
+          limitValue: 100,
+        },
+      ];
+      expect(formatStatus({ ui: { theme } } as any, windows, true)).toContain(
+        "[success]●",
+      );
+    });
+  });
 });
