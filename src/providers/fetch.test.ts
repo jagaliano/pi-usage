@@ -1,18 +1,30 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AuthStorage, inMemoryAuthStorage } from "../lib/auth.js";
 import {
   fetchAnthropicQuotasWithToken,
   fetchCodexQuotasWithToken,
+  fetchCommandCodeQuotas,
   fetchGitHubCopilotQuotas,
   fetchGitHubCopilotQuotasWithToken,
   fetchKimiCodingQuotasWithToken,
   fetchOllamaCloudQuotasWithToken,
+  fetchOpenCodeGoQuotas,
   fetchOpenRouterQuotasWithToken,
   fetchSyntheticQuotas,
   fetchXaiQuotasWithToken,
 } from "./fetch.js";
+import { resetOpenCodeGoApiKeyCache } from "./opencode-go-config.js";
+import { resetCommandCodeApiKeyCache } from "./commandcode-config.js";
 
 const originalFetch = globalThis.fetch;
+
+function authorizationFromCall(call: unknown): string | undefined {
+  const [, init] = call as [string, RequestInit];
+  return (init?.headers as Record<string, string> | undefined)?.Authorization;
+}
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
@@ -493,5 +505,386 @@ describe("fetchXaiQuotasWithToken", () => {
       success: false,
       error: { kind: "http", message: "token rejected" },
     });
+  });
+});
+
+describe("fetchCommandCodeQuotas", () => {
+  let homeDir = "";
+
+  beforeEach(() => {
+    // Hermetic: a real exported Command Code key would otherwise satisfy the
+    // "no key exists anywhere" test and make a live call.
+    vi.stubEnv("COMMAND_CODE_API_KEY", "");
+    vi.stubEnv("COMMANDCODE_API_KEY", "");
+    resetCommandCodeApiKeyCache();
+  });
+
+  afterEach(async () => {
+    vi.unstubAllEnvs();
+    resetCommandCodeApiKeyCache();
+    if (homeDir) {
+      await rm(homeDir, { recursive: true, force: true });
+      homeDir = "";
+    }
+  });
+
+  async function stubEmptyHome() {
+    homeDir = await mkdtemp(join(tmpdir(), "pi-usage-commandcode-home-"));
+    vi.stubEnv("HOME", homeDir);
+    resetCommandCodeApiKeyCache();
+    return homeDir;
+  }
+
+  function mockAccountFetch() {
+    const fetchSpy = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/alpha/whoami")) {
+        return new Response(
+          JSON.stringify({ org: { id: "org_1", login: "acme" } }),
+          { status: 200 },
+        );
+      }
+      if (url.includes("/alpha/billing/credits")) {
+        return new Response(
+          JSON.stringify({
+            credits: { monthlyCredits: 20, purchasedCredits: 5, freeCredits: 0 },
+            windowLimits: {
+              fiveHour: { used: 2.5, cap: 10, resetAt: 1_790_913_204 },
+              weekly: { used: 10, cap: 40, resetAt: 1_790_999_999 },
+            },
+          }),
+          { status: 200 },
+        );
+      }
+      if (url.includes("/alpha/billing/subscriptions")) {
+        return new Response(
+          JSON.stringify({ data: { planId: "pro", status: "active" } }),
+          { status: 200 },
+        );
+      }
+      if (url.includes("/alpha/usage/summary")) {
+        return new Response(JSON.stringify({ totalCost: 5, totalCount: 10 }), {
+          status: 200,
+        });
+      }
+      return new Response("not found", { status: 404 });
+    });
+    globalThis.fetch = fetchSpy as unknown as typeof fetch;
+    return fetchSpy;
+  }
+
+  it("uses the stored auth key and converts Command Code windows", async () => {
+    await stubEmptyHome();
+    const fetchSpy = mockAccountFetch();
+
+    const result = await fetchCommandCodeQuotas(
+      inMemoryAuthStorage({ commandcode: { apiKey: "sk-stored" } }),
+    );
+
+    expect(result).toMatchObject({ success: true });
+    if (!result.success) throw new Error("expected success");
+    expect(result.data.provider).toBe("commandcode");
+    expect(result.data.windows.map((w) => w.label)).toEqual([
+      "5h Rolling",
+      "Weekly",
+      "Monthly Budget",
+    ]);
+    expect(authorizationFromCall(fetchSpy.mock.calls[0])).toBe("Bearer sk-stored");
+  });
+
+  it("reports a config error when no key exists anywhere", async () => {
+    await stubEmptyHome();
+    const fetchSpy = vi.fn();
+    globalThis.fetch = fetchSpy as unknown as typeof fetch;
+
+    const result = await fetchCommandCodeQuotas(inMemoryAuthStorage());
+
+    expect(result).toMatchObject({ success: false, error: { kind: "config" } });
+    if (result.success) throw new Error("expected failure");
+    expect(result.error.message).toContain("pi /login");
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("prefers COMMAND_CODE_API_KEY over credential files", async () => {
+    const home = await stubEmptyHome();
+    await mkdir(join(home, ".commandcode"), { recursive: true });
+    await writeFile(
+      join(home, ".commandcode", "auth.json"),
+      JSON.stringify({ apiKey: "sk-from-file" }),
+    );
+    vi.stubEnv("COMMAND_CODE_API_KEY", "sk-from-env");
+    const fetchSpy = mockAccountFetch();
+
+    await fetchCommandCodeQuotas(inMemoryAuthStorage());
+
+    expect(authorizationFromCall(fetchSpy.mock.calls[0])).toBe("Bearer sk-from-env");
+  });
+
+  it("reads the Command Code CLI auth.json as a fallback", async () => {
+    const home = await stubEmptyHome();
+    await mkdir(join(home, ".commandcode"), { recursive: true });
+    await writeFile(
+      join(home, ".commandcode", "auth.json"),
+      JSON.stringify({ commandcode: { type: "oauth", access: "sk-cli" } }),
+    );
+    const fetchSpy = mockAccountFetch();
+
+    const result = await fetchCommandCodeQuotas(inMemoryAuthStorage());
+
+    expect(result).toMatchObject({ success: true });
+    expect(authorizationFromCall(fetchSpy.mock.calls[0])).toBe("Bearer sk-cli");
+  });
+
+  it("reports HTTP failures as http errors", async () => {
+    await stubEmptyHome();
+    globalThis.fetch = vi.fn(
+      async () => new Response("nope", { status: 500 }),
+    ) as unknown as typeof fetch;
+
+    const result = await fetchCommandCodeQuotas(
+      inMemoryAuthStorage({ commandcode: { apiKey: "sk-stored" } }),
+    );
+
+    expect(result).toMatchObject({ success: false, error: { kind: "http" } });
+    if (result.success) throw new Error("expected failure");
+    expect(result.error.message).toContain("Command Code");
+  });
+
+  it("ignores a placeholder stored key and falls back to the environment", async () => {
+    await stubEmptyHome();
+    vi.stubEnv("COMMAND_CODE_API_KEY", "sk-env");
+    const fetchSpy = mockAccountFetch();
+
+    const result = await fetchCommandCodeQuotas(
+      inMemoryAuthStorage({ commandcode: { apiKey: "COMMAND_CODE_API_KEY" } }),
+    );
+
+    expect(result).toMatchObject({ success: true });
+    expect(authorizationFromCall(fetchSpy.mock.calls[0])).toBe("Bearer sk-env");
+  });
+
+  it("continues past a malformed auth file to a valid one", async () => {
+    const home = await stubEmptyHome();
+    await mkdir(join(home, ".commandcode"), { recursive: true });
+    await mkdir(join(home, ".omp", "agent"), { recursive: true });
+    await writeFile(join(home, ".commandcode", "auth.json"), "{ not json sk-secret-leak");
+    await writeFile(
+      join(home, ".omp", "agent", "auth.json"),
+      JSON.stringify({ commandcode: { type: "api", key: "sk-omp" } }),
+    );
+    const fetchSpy = mockAccountFetch();
+
+    const result = await fetchCommandCodeQuotas(inMemoryAuthStorage());
+
+    expect(result).toMatchObject({ success: true });
+    expect(authorizationFromCall(fetchSpy.mock.calls[0])).toBe("Bearer sk-omp");
+  });
+
+  it("does not leak auth-file contents in a config error", async () => {
+    const home = await stubEmptyHome();
+    await mkdir(join(home, ".commandcode"), { recursive: true });
+    await writeFile(join(home, ".commandcode", "auth.json"), "{ not json sk-secret-leak");
+
+    const result = await fetchCommandCodeQuotas(inMemoryAuthStorage());
+
+    expect(result).toMatchObject({ success: false, error: { kind: "config" } });
+    if (result.success) throw new Error("expected failure");
+    expect(result.error.message).not.toContain("sk-secret-leak");
+    expect(result.error.message).toContain("not valid JSON");
+  });
+});
+
+describe("fetchOpenCodeGoQuotas", () => {
+  let homeDir = "";
+
+  beforeEach(() => {
+    // Hermetic: a real exported OPENCODE_GO_API_KEY would otherwise win over
+    // the empty in-memory auth storage and turn these "no credentials" tests
+    // into live-credential fetches. vi.unstubAllEnvs restores the original in
+    // afterEach.
+    vi.stubEnv("OPENCODE_GO_API_KEY", "");
+    vi.stubEnv("OPENCODE_API_KEY", "");
+    resetOpenCodeGoApiKeyCache();
+  });
+
+  afterEach(async () => {
+    vi.unstubAllEnvs();
+    resetOpenCodeGoApiKeyCache();
+    if (homeDir) {
+      await rm(homeDir, { recursive: true, force: true });
+      homeDir = "";
+    }
+  });
+
+  async function stubEmptyHome() {
+    homeDir = await mkdtemp(join(tmpdir(), "pi-usage-go-home-"));
+    vi.stubEnv("HOME", homeDir);
+    resetOpenCodeGoApiKeyCache();
+    return homeDir;
+  }
+
+  it("uses the stored auth.json key and converts windows", async () => {
+    await stubEmptyHome();
+    const fetchSpy = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          usage: {
+            rolling: { status: "ok", percent: 12, resetsAt: "2026-09-17T19:29:31.391Z" },
+            weekly: { status: "ok", percent: 34, resetsAt: "2026-09-21T00:00:00.000Z" },
+            monthly: { status: "rate-limited", percent: 100, resetsAt: "2026-10-16T13:49:43.000Z" },
+          },
+        }),
+        { status: 200 },
+      ),
+    );
+    globalThis.fetch = fetchSpy as unknown as typeof fetch;
+
+    const result = await fetchOpenCodeGoQuotas(
+      inMemoryAuthStorage({ "opencode-go": { apiKey: "sk-stored" } }),
+    );
+
+    expect(result).toMatchObject({ success: true });
+    if (!result.success) throw new Error("expected success");
+    expect(result.data.windows.map((w) => w.label)).toEqual([
+      "5h Rolling",
+      "Weekly",
+      "Monthly",
+    ]);
+    expect(result.data.windows[2]).toMatchObject({ usedPercent: 100, limited: true });
+    const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    expect((init.headers as Record<string, string>).Authorization).toBe("Bearer sk-stored");
+  });
+
+  it("reports a config error when no key exists anywhere", async () => {
+    await stubEmptyHome();
+    const fetchSpy = vi.fn();
+    globalThis.fetch = fetchSpy as unknown as typeof fetch;
+
+    const result = await fetchOpenCodeGoQuotas(inMemoryAuthStorage());
+
+    expect(result).toMatchObject({ success: false, error: { kind: "config" } });
+    if (result.success) throw new Error("expected failure");
+    expect(result.error.message).toContain("pi /login opencode-go");
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("prefers OPENCODE_GO_API_KEY over credential files", async () => {
+    const home = await stubEmptyHome();
+    await mkdir(join(home, ".config", "opencode", "opencode-quota"), { recursive: true });
+    await writeFile(
+      join(home, ".config", "opencode", "opencode-quota", "opencode-go.json"),
+      JSON.stringify({ apiKey: "sk-from-file" }),
+    );
+    vi.stubEnv("OPENCODE_GO_API_KEY", "sk-from-env");
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ usage: { rolling: { percent: 1 } } }), { status: 200 }),
+    ) as unknown as typeof fetch;
+
+    await fetchOpenCodeGoQuotas(inMemoryAuthStorage());
+    const [url, init] = (globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock
+      .calls[0] as [string, RequestInit];
+    expect(url).toBe("https://opencode.ai/zen/go/v1/usage");
+    expect((init.headers as Record<string, string>).Authorization).toBe("Bearer sk-from-env");
+  });
+
+  it("falls back to OPENCODE_API_KEY, the variable Pi's own provider uses", async () => {
+    await stubEmptyHome();
+    vi.stubEnv("OPENCODE_API_KEY", "sk-pi-env");
+    const fetchSpy = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ usage: { rolling: { percent: 1 } } }), { status: 200 }),
+    );
+    globalThis.fetch = fetchSpy as unknown as typeof fetch;
+
+    await fetchOpenCodeGoQuotas(inMemoryAuthStorage());
+
+    expect(authorizationFromCall(fetchSpy.mock.calls[0])).toBe("Bearer sk-pi-env");
+  });
+
+  it("prefers OPENCODE_GO_API_KEY over Pi's resolved generic key", async () => {
+    await stubEmptyHome();
+    vi.stubEnv("OPENCODE_GO_API_KEY", "sk-go-env");
+    vi.stubEnv("OPENCODE_API_KEY", "sk-pi-env");
+    const fetchSpy = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ usage: { rolling: { percent: 1 } } }), { status: 200 }),
+    );
+    globalThis.fetch = fetchSpy as unknown as typeof fetch;
+
+    // Pi's resolved lookup returns the generic OPENCODE_API_KEY (its own
+    // opencode-go provider auth) while no credential is stored, so the
+    // Go-specific variable must still win.
+    const resolvedOnlyStorage = {
+      get: () => undefined,
+      getApiKey: async () => "sk-pi-env",
+    };
+
+    await fetchOpenCodeGoQuotas(resolvedOnlyStorage);
+
+    expect(authorizationFromCall(fetchSpy.mock.calls[0])).toBe("Bearer sk-go-env");
+  });
+
+  it("prefers the stored credential over both environment variables", async () => {
+    await stubEmptyHome();
+    vi.stubEnv("OPENCODE_GO_API_KEY", "sk-go-env");
+    vi.stubEnv("OPENCODE_API_KEY", "sk-pi-env");
+    const fetchSpy = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ usage: { rolling: { percent: 1 } } }), { status: 200 }),
+    );
+    globalThis.fetch = fetchSpy as unknown as typeof fetch;
+
+    await fetchOpenCodeGoQuotas(
+      inMemoryAuthStorage({ "opencode-go": { apiKey: "sk-stored" } }),
+    );
+
+    expect(authorizationFromCall(fetchSpy.mock.calls[0])).toBe("Bearer sk-stored");
+  });
+
+  it("does not leak OpenCode CLI auth-file contents in a config error", async () => {
+    const home = await stubEmptyHome();
+    await mkdir(join(home, ".local", "share", "opencode"), { recursive: true });
+    await writeFile(
+      join(home, ".local", "share", "opencode", "auth.json"),
+      "{ not json sk-secret-leak",
+    );
+
+    const result = await fetchOpenCodeGoQuotas(inMemoryAuthStorage());
+
+    expect(result).toMatchObject({ success: false, error: { kind: "config" } });
+    if (result.success) throw new Error("expected failure");
+    expect(result.error.message).not.toContain("sk-secret-leak");
+    expect(result.error.message).toContain("not valid JSON");
+  });
+
+  it("explains the migration for a legacy workspaceId/authCookie config", async () => {
+    const home = await stubEmptyHome();
+    await mkdir(join(home, ".config", "opencode", "opencode-quota"), { recursive: true });
+    await writeFile(
+      join(home, ".config", "opencode", "opencode-quota", "opencode-go.json"),
+      JSON.stringify({ workspaceId: "wrk_1", authCookie: "Fe26.2**abc" }),
+    );
+
+    const result = await fetchOpenCodeGoQuotas(inMemoryAuthStorage());
+
+    expect(result).toMatchObject({ success: false, error: { kind: "config" } });
+    if (result.success) throw new Error("expected failure");
+    expect(result.error.message).toContain("no longer supported");
+  });
+
+  it("reads the OpenCode CLI auth.json as a fallback", async () => {
+    const home = await stubEmptyHome();
+    await mkdir(join(home, ".local", "share", "opencode"), { recursive: true });
+    await writeFile(
+      join(home, ".local", "share", "opencode", "auth.json"),
+      JSON.stringify({ "opencode-go": { type: "api_key", key: "sk-cli" } }),
+    );
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ usage: { rolling: { percent: 2 } } }), { status: 200 }),
+    ) as unknown as typeof fetch;
+
+    const result = await fetchOpenCodeGoQuotas(inMemoryAuthStorage());
+
+    expect(result).toMatchObject({ success: true });
+    const [, init] = (globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock
+      .calls[0] as [string, RequestInit];
+    expect((init.headers as Record<string, string>).Authorization).toBe("Bearer sk-cli");
   });
 });

@@ -9,7 +9,8 @@ export type SupportedQuotaProvider =
   | "opencode-go"
   | "kimi-coding"
   | "ollama-cloud"
-  | "minimax";
+  | "minimax"
+  | "commandcode";
 
 export type QuotasErrorKind =
   | "cancelled"
@@ -38,6 +39,8 @@ export interface QuotaWindow {
   usedValue: number;
   limitValue: number;
   isCurrency?: boolean;
+  /** Currency window that reports a remaining balance, not a used/limit ratio. */
+  isBalance?: boolean;
   showPace?: boolean;
   paceScale?: number;
   limited?: boolean;

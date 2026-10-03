@@ -4,7 +4,7 @@ Pi extension that surfaces per-provider token-usage and quota status in the foot
 
 ## Supported providers
 
-Anthropic, OpenAI Codex, GitHub Copilot, OpenRouter, Synthetic, Grok, Z.ai, OpenCode Go, Kimi Code, Ollama Cloud, and MiniMax.
+Anthropic, OpenAI Codex, GitHub Copilot, OpenRouter, Synthetic, Grok, Z.ai, OpenCode Go, Kimi Code, Ollama Cloud, MiniMax, and Command Code.
 
 ## Install
 
@@ -20,6 +20,10 @@ After install, register credentials once per provider, e.g.:
 pi /login minimax
 # paste MINIMAX_API_KEY (or set MINIMAX_API_KEY env var)
 ```
+
+OpenCode Go quotas come from the official `https://opencode.ai/zen/go/v1/usage` endpoint and read the API key from `pi /login opencode-go` (`auth.json`), then `OPENCODE_GO_API_KEY`, then `OPENCODE_API_KEY` (the shared variable Pi's own opencode-go provider authenticates with), then a `apiKey` field in `~/.config/opencode/opencode-quota/opencode-go.json` or the OpenCode CLI `~/.local/share/opencode/auth.json`. The old `workspaceId`/`authCookie` dashboard scraping is no longer supported.
+
+Command Code usage comes from the Command Code API (`https://api.commandcode.ai`) and reads the API key from `pi /login` (select Command Code), then `COMMAND_CODE_API_KEY` / `COMMANDCODE_API_KEY`, then `~/.commandcode/auth.json` or `~/.omp/agent/auth.json`.
 
 Restart or `/reload` to load the extension.
 
@@ -39,6 +43,7 @@ Restart or `/reload` to load the extension.
 | `/kimi:usage` | Kimi Code usage only |
 | `/ollama:usage` | Ollama Cloud usage only |
 | `/minimax:usage` | MiniMax usage only |
+| `/commandcode:usage` | Command Code usage only |
 | `/tokens` | Cross-session token/cost usage |
 | `/usage:settings` | Toggle features on or off |
 

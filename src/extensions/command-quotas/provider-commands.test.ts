@@ -76,4 +76,13 @@ describe("getProviderCommandInfo", () => {
       title: "MiniMax Usage",
     });
   });
+
+  it("maps commandcode to commandcode:usage", () => {
+    const info = getProviderCommandInfo("commandcode");
+    expect(info).toMatchObject<Partial<ProviderCommandInfo>>({
+      provider: "commandcode",
+      commandName: "commandcode:usage",
+      title: "Command Code Usage",
+    });
+  });
 });

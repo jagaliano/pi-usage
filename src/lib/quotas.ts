@@ -14,6 +14,7 @@ export const SUPPORTED_PROVIDERS: SupportedQuotaProvider[] = [
   "kimi-coding",
   "ollama-cloud",
   "minimax",
+  "commandcode",
 ];
 
 export const PROVIDER_LABELS: Record<SupportedQuotaProvider, string> = {
@@ -28,6 +29,7 @@ export const PROVIDER_LABELS: Record<SupportedQuotaProvider, string> = {
   "kimi-coding": "Kimi Code",
   "ollama-cloud": "Ollama Cloud",
   minimax: "MiniMax",
+  commandcode: "Command Code",
 };
 
 const PROVIDER_TTLS_MS: Record<SupportedQuotaProvider, number> = {
@@ -42,6 +44,7 @@ const PROVIDER_TTLS_MS: Record<SupportedQuotaProvider, number> = {
   "kimi-coding": 60_000,
   "ollama-cloud": 60_000,
   minimax: 60_000,
+  commandcode: 60_000,
 };
 
 type CacheEntry = {

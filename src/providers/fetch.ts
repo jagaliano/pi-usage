@@ -16,9 +16,19 @@ import {
   parseXaiUsage,
   parseZaiUsage,
   parseOpenCodeGoUsage,
+  parseCommandCodeUsage,
 } from "./providers.js";
-import { resolveOpenCodeGoConfigCached } from "./opencode-go-config.js";
+import {
+  resolveOpenCodeGoApiKeyFromEnv,
+  resolveOpenCodeGoApiKeyFromFilesCached,
+} from "./opencode-go-config.js";
 import { queryOpenCodeGoQuota } from "./opencode-go.js";
+import {
+  normalizeCommandCodeApiKey,
+  resolveCommandCodeApiKeyFromEnv,
+  resolveCommandCodeApiKeyFromFilesCached,
+} from "./commandcode-config.js";
+import { queryCommandCodeQuota } from "./commandcode.js";
 
 const FETCH_TIMEOUT_MS = 15_000;
 const COPILOT_VERSION = "0.35.0";
@@ -36,6 +46,32 @@ async function providerAccessToken(
   provider: string,
 ): Promise<string | undefined> {
   return authStorage.getApiKey(provider);
+}
+
+/**
+ * Read the *stored* credential for a provider, without falling back to
+ * ambient environment variables.
+ *
+ * `authStorage.getApiKey` resolves ambient auth as well: Pi's built-in
+ * opencode-go provider authenticates with `OPENCODE_API_KEY`, so a resolved
+ * lookup returns that generic variable before this provider ever consults its
+ * own `OPENCODE_GO_API_KEY`. Reading the stored credential directly keeps the
+ * documented precedence (stored → Go-specific env → generic env → files)
+ * honest, and avoids selecting a Zen-scoped key for the Go endpoint.
+ */
+function storedProviderApiKey(
+  authStorage: AuthStorage,
+  provider: string,
+): string | undefined {
+  const credential = authStorage.get(provider);
+  if (typeof credential === "string") return credential.trim() || undefined;
+  if (!credential || typeof credential !== "object") return undefined;
+  const record = credential as Record<string, unknown>;
+  for (const field of ["key", "apiKey", "access"]) {
+    const value = record[field];
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return undefined;
 }
 
 /**
@@ -418,34 +454,77 @@ export async function fetchSyntheticQuotas(
 }
 
 export async function fetchOpenCodeGoQuotas(
-  _authStorage: AuthStorage,
+  authStorage: AuthStorage,
   signal?: AbortSignal,
 ): Promise<QuotasResult> {
-  const configResult = await resolveOpenCodeGoConfigCached();
-  if (configResult.state === "none") {
+  // Precedence: stored `pi /login opencode-go` credential, then the
+  // Go-specific OPENCODE_GO_API_KEY, then the generic OPENCODE_API_KEY (the
+  // variable Pi's own opencode-go provider uses), then a config file / the
+  // OpenCode CLI auth.json. Pi's resolved lookup is kept as a last resort for
+  // auth backends that do not expose the raw stored credential.
+  let apiKey = storedProviderApiKey(authStorage, "opencode-go");
+  if (!apiKey) apiKey = resolveOpenCodeGoApiKeyFromEnv()?.apiKey;
+  if (!apiKey) apiKey = await providerAccessToken(authStorage, "opencode-go");
+
+  if (!apiKey) {
+    const fileResult = await resolveOpenCodeGoApiKeyFromFilesCached();
+    if (fileResult.state === "invalid") {
+      return failure(
+        `OpenCode Go config invalid (${fileResult.source}): ${fileResult.error}`,
+        "config",
+      );
+    }
+    if (fileResult.state === "configured") apiKey = fileResult.apiKey;
+  }
+
+  if (!apiKey) {
     return failure(
-      "No OpenCode Go config. Set OPENCODE_GO_WORKSPACE_ID +" +
-        " OPENCODE_GO_AUTH_COOKIE, or create" +
+      "No OpenCode Go API key found. Run `pi /login opencode-go`," +
+        " set OPENCODE_GO_API_KEY or OPENCODE_API_KEY, or add an \"apiKey\" field to" +
         " ~/.config/opencode/opencode-quota/opencode-go.json",
       "config",
     );
   }
-  if (configResult.state === "incomplete") {
-    return failure(
-      `OpenCode Go config incomplete: missing ${configResult.missing}`,
-      "config",
-    );
+
+  const result = await queryOpenCodeGoQuota({ apiKey }, signal);
+  if (!result.success) return failure(result.error, "http");
+  return success("opencode-go", parseOpenCodeGoUsage(result));
+}
+
+export async function fetchCommandCodeQuotas(
+  authStorage: AuthStorage,
+  signal?: AbortSignal,
+): Promise<QuotasResult> {
+  // Prefer the key stored via `pi /login` (auth.json), then the
+  // COMMAND_CODE_API_KEY env var, then an auth file fallback. Normalize the
+  // stored value: a host may hand back a literal env-var name, not a key.
+  let apiKey = normalizeCommandCodeApiKey(
+    await providerAccessToken(authStorage, "commandcode"),
+  );
+  if (!apiKey) apiKey = resolveCommandCodeApiKeyFromEnv()?.apiKey;
+
+  if (!apiKey) {
+    const fileResult = await resolveCommandCodeApiKeyFromFilesCached();
+    if (fileResult.state === "invalid") {
+      return failure(
+        `Command Code config invalid (${fileResult.source}): ${fileResult.error}`,
+        "config",
+      );
+    }
+    if (fileResult.state === "configured") apiKey = fileResult.apiKey;
   }
-  if (configResult.state === "invalid") {
+
+  if (!apiKey) {
     return failure(
-      `OpenCode Go config invalid: ${configResult.error}`,
+      "No Command Code API key found. Run `pi /login` and select Command Code," +
+        " set COMMAND_CODE_API_KEY, or add credentials to ~/.commandcode/auth.json",
       "config",
     );
   }
 
-  const result = await queryOpenCodeGoQuota(configResult.config, signal);
+  const result = await queryCommandCodeQuota({ apiKey }, signal);
   if (!result.success) return failure(result.error, "http");
-  return success("opencode-go", parseOpenCodeGoUsage(result));
+  return success("commandcode", parseCommandCodeUsage(result.quota));
 }
 
 export async function fetchKimiCodingQuotasWithToken(
@@ -618,4 +697,5 @@ export const PROVIDER_FETCHERS = {
   "kimi-coding": fetchKimiCodingQuotas,
   "ollama-cloud": fetchOllamaCloudQuotas,
   minimax: fetchMiniMaxQuotas,
+  commandcode: fetchCommandCodeQuotas,
 } as const;
