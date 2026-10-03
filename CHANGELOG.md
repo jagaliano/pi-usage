@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [2.2.1] - 2026-10-03
+
 ### Fixed
 - **Z.ai credit-based plans**: the GLM Coding Plan migrated quotas from tokens to credits, so `parseZaiUsage` returned zero windows and z.ai silently disappeared from the dashboard. `CREDIT_LIMIT` windows are now mapped with their real credit counts (5h and weekly), falling back to percentages when counts are absent. (Ported from latentminds-ai/pi-quotas #42.)
 
