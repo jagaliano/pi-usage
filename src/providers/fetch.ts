@@ -16,12 +16,19 @@ import {
   parseXaiUsage,
   parseZaiUsage,
   parseOpenCodeGoUsage,
+  parseCommandCodeUsage,
 } from "./providers.js";
 import {
   resolveOpenCodeGoApiKeyFromEnv,
   resolveOpenCodeGoApiKeyFromFilesCached,
 } from "./opencode-go-config.js";
 import { queryOpenCodeGoQuota } from "./opencode-go.js";
+import {
+  normalizeCommandCodeApiKey,
+  resolveCommandCodeApiKeyFromEnv,
+  resolveCommandCodeApiKeyFromFilesCached,
+} from "./commandcode-config.js";
+import { queryCommandCodeQuota } from "./commandcode.js";
 
 const FETCH_TIMEOUT_MS = 15_000;
 const COPILOT_VERSION = "0.35.0";
@@ -484,6 +491,42 @@ export async function fetchOpenCodeGoQuotas(
   return success("opencode-go", parseOpenCodeGoUsage(result));
 }
 
+export async function fetchCommandCodeQuotas(
+  authStorage: AuthStorage,
+  signal?: AbortSignal,
+): Promise<QuotasResult> {
+  // Prefer the key stored via `pi /login` (auth.json), then the
+  // COMMAND_CODE_API_KEY env var, then an auth file fallback. Normalize the
+  // stored value: a host may hand back a literal env-var name, not a key.
+  let apiKey = normalizeCommandCodeApiKey(
+    await providerAccessToken(authStorage, "commandcode"),
+  );
+  if (!apiKey) apiKey = resolveCommandCodeApiKeyFromEnv()?.apiKey;
+
+  if (!apiKey) {
+    const fileResult = await resolveCommandCodeApiKeyFromFilesCached();
+    if (fileResult.state === "invalid") {
+      return failure(
+        `Command Code config invalid (${fileResult.source}): ${fileResult.error}`,
+        "config",
+      );
+    }
+    if (fileResult.state === "configured") apiKey = fileResult.apiKey;
+  }
+
+  if (!apiKey) {
+    return failure(
+      "No Command Code API key found. Run `pi /login` and select Command Code," +
+        " set COMMAND_CODE_API_KEY, or add credentials to ~/.commandcode/auth.json",
+      "config",
+    );
+  }
+
+  const result = await queryCommandCodeQuota({ apiKey }, signal);
+  if (!result.success) return failure(result.error, "http");
+  return success("commandcode", parseCommandCodeUsage(result.quota));
+}
+
 export async function fetchKimiCodingQuotasWithToken(
   accessToken: string | undefined,
   signal?: AbortSignal,
@@ -654,4 +697,5 @@ export const PROVIDER_FETCHERS = {
   "kimi-coding": fetchKimiCodingQuotas,
   "ollama-cloud": fetchOllamaCloudQuotas,
   minimax: fetchMiniMaxQuotas,
+  commandcode: fetchCommandCodeQuotas,
 } as const;

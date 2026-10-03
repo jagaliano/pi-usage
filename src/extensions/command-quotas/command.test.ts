@@ -17,13 +17,16 @@ const CREDENTIAL_ENV_KEYS = [
   "MINIMAX_API_KEY",
   "OPENCODE_GO_API_KEY",
   "OPENCODE_API_KEY",
+  "COMMAND_CODE_API_KEY",
+  "COMMANDCODE_API_KEY",
 ];
 const originalFetch = globalThis.fetch;
 
 beforeEach(() => {
   for (const key of CREDENTIAL_ENV_KEYS) delete process.env[key];
-  // Providers that fall back to credential files (OpenCode Go, Codex) would
-  // otherwise pick up the developer's real keys from their home directory.
+  // Providers that fall back to credential files (Command Code, OpenCode Go,
+  // Codex) would otherwise pick up the developer's real keys from their home
+  // directory.
   vi.stubEnv("HOME", join(tmpdir(), "pi-usage-test-no-home"));
   globalThis.fetch = vi.fn().mockRejectedValue(
     new Error("network disabled in tests"),

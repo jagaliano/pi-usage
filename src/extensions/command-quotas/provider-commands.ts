@@ -76,5 +76,11 @@ export function getProviderCommandInfo(
         commandName: "minimax:usage",
         title: "MiniMax Usage",
       };
+    case "commandcode":
+      return {
+        provider,
+        commandName: "commandcode:usage",
+        title: "Command Code Usage",
+      };
   }
 }

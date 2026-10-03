@@ -6,6 +6,7 @@ import { AuthStorage, inMemoryAuthStorage } from "../lib/auth.js";
 import {
   fetchAnthropicQuotasWithToken,
   fetchCodexQuotasWithToken,
+  fetchCommandCodeQuotas,
   fetchGitHubCopilotQuotas,
   fetchGitHubCopilotQuotasWithToken,
   fetchKimiCodingQuotasWithToken,
@@ -16,6 +17,7 @@ import {
   fetchXaiQuotasWithToken,
 } from "./fetch.js";
 import { resetOpenCodeGoApiKeyCache } from "./opencode-go-config.js";
+import { resetCommandCodeApiKeyCache } from "./commandcode-config.js";
 
 const originalFetch = globalThis.fetch;
 
@@ -503,6 +505,192 @@ describe("fetchXaiQuotasWithToken", () => {
       success: false,
       error: { kind: "http", message: "token rejected" },
     });
+  });
+});
+
+describe("fetchCommandCodeQuotas", () => {
+  let homeDir = "";
+
+  beforeEach(() => {
+    // Hermetic: a real exported Command Code key would otherwise satisfy the
+    // "no key exists anywhere" test and make a live call.
+    vi.stubEnv("COMMAND_CODE_API_KEY", "");
+    vi.stubEnv("COMMANDCODE_API_KEY", "");
+    resetCommandCodeApiKeyCache();
+  });
+
+  afterEach(async () => {
+    vi.unstubAllEnvs();
+    resetCommandCodeApiKeyCache();
+    if (homeDir) {
+      await rm(homeDir, { recursive: true, force: true });
+      homeDir = "";
+    }
+  });
+
+  async function stubEmptyHome() {
+    homeDir = await mkdtemp(join(tmpdir(), "pi-usage-commandcode-home-"));
+    vi.stubEnv("HOME", homeDir);
+    resetCommandCodeApiKeyCache();
+    return homeDir;
+  }
+
+  function mockAccountFetch() {
+    const fetchSpy = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/alpha/whoami")) {
+        return new Response(
+          JSON.stringify({ org: { id: "org_1", login: "acme" } }),
+          { status: 200 },
+        );
+      }
+      if (url.includes("/alpha/billing/credits")) {
+        return new Response(
+          JSON.stringify({
+            credits: { monthlyCredits: 20, purchasedCredits: 5, freeCredits: 0 },
+            windowLimits: {
+              fiveHour: { used: 2.5, cap: 10, resetAt: 1_790_913_204 },
+              weekly: { used: 10, cap: 40, resetAt: 1_790_999_999 },
+            },
+          }),
+          { status: 200 },
+        );
+      }
+      if (url.includes("/alpha/billing/subscriptions")) {
+        return new Response(
+          JSON.stringify({ data: { planId: "pro", status: "active" } }),
+          { status: 200 },
+        );
+      }
+      if (url.includes("/alpha/usage/summary")) {
+        return new Response(JSON.stringify({ totalCost: 5, totalCount: 10 }), {
+          status: 200,
+        });
+      }
+      return new Response("not found", { status: 404 });
+    });
+    globalThis.fetch = fetchSpy as unknown as typeof fetch;
+    return fetchSpy;
+  }
+
+  it("uses the stored auth key and converts Command Code windows", async () => {
+    await stubEmptyHome();
+    const fetchSpy = mockAccountFetch();
+
+    const result = await fetchCommandCodeQuotas(
+      inMemoryAuthStorage({ commandcode: { apiKey: "sk-stored" } }),
+    );
+
+    expect(result).toMatchObject({ success: true });
+    if (!result.success) throw new Error("expected success");
+    expect(result.data.provider).toBe("commandcode");
+    expect(result.data.windows.map((w) => w.label)).toEqual([
+      "5h Rolling",
+      "Weekly",
+      "Monthly Budget",
+    ]);
+    expect(authorizationFromCall(fetchSpy.mock.calls[0])).toBe("Bearer sk-stored");
+  });
+
+  it("reports a config error when no key exists anywhere", async () => {
+    await stubEmptyHome();
+    const fetchSpy = vi.fn();
+    globalThis.fetch = fetchSpy as unknown as typeof fetch;
+
+    const result = await fetchCommandCodeQuotas(inMemoryAuthStorage());
+
+    expect(result).toMatchObject({ success: false, error: { kind: "config" } });
+    if (result.success) throw new Error("expected failure");
+    expect(result.error.message).toContain("pi /login");
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("prefers COMMAND_CODE_API_KEY over credential files", async () => {
+    const home = await stubEmptyHome();
+    await mkdir(join(home, ".commandcode"), { recursive: true });
+    await writeFile(
+      join(home, ".commandcode", "auth.json"),
+      JSON.stringify({ apiKey: "sk-from-file" }),
+    );
+    vi.stubEnv("COMMAND_CODE_API_KEY", "sk-from-env");
+    const fetchSpy = mockAccountFetch();
+
+    await fetchCommandCodeQuotas(inMemoryAuthStorage());
+
+    expect(authorizationFromCall(fetchSpy.mock.calls[0])).toBe("Bearer sk-from-env");
+  });
+
+  it("reads the Command Code CLI auth.json as a fallback", async () => {
+    const home = await stubEmptyHome();
+    await mkdir(join(home, ".commandcode"), { recursive: true });
+    await writeFile(
+      join(home, ".commandcode", "auth.json"),
+      JSON.stringify({ commandcode: { type: "oauth", access: "sk-cli" } }),
+    );
+    const fetchSpy = mockAccountFetch();
+
+    const result = await fetchCommandCodeQuotas(inMemoryAuthStorage());
+
+    expect(result).toMatchObject({ success: true });
+    expect(authorizationFromCall(fetchSpy.mock.calls[0])).toBe("Bearer sk-cli");
+  });
+
+  it("reports HTTP failures as http errors", async () => {
+    await stubEmptyHome();
+    globalThis.fetch = vi.fn(
+      async () => new Response("nope", { status: 500 }),
+    ) as unknown as typeof fetch;
+
+    const result = await fetchCommandCodeQuotas(
+      inMemoryAuthStorage({ commandcode: { apiKey: "sk-stored" } }),
+    );
+
+    expect(result).toMatchObject({ success: false, error: { kind: "http" } });
+    if (result.success) throw new Error("expected failure");
+    expect(result.error.message).toContain("Command Code");
+  });
+
+  it("ignores a placeholder stored key and falls back to the environment", async () => {
+    await stubEmptyHome();
+    vi.stubEnv("COMMAND_CODE_API_KEY", "sk-env");
+    const fetchSpy = mockAccountFetch();
+
+    const result = await fetchCommandCodeQuotas(
+      inMemoryAuthStorage({ commandcode: { apiKey: "COMMAND_CODE_API_KEY" } }),
+    );
+
+    expect(result).toMatchObject({ success: true });
+    expect(authorizationFromCall(fetchSpy.mock.calls[0])).toBe("Bearer sk-env");
+  });
+
+  it("continues past a malformed auth file to a valid one", async () => {
+    const home = await stubEmptyHome();
+    await mkdir(join(home, ".commandcode"), { recursive: true });
+    await mkdir(join(home, ".omp", "agent"), { recursive: true });
+    await writeFile(join(home, ".commandcode", "auth.json"), "{ not json sk-secret-leak");
+    await writeFile(
+      join(home, ".omp", "agent", "auth.json"),
+      JSON.stringify({ commandcode: { type: "api", key: "sk-omp" } }),
+    );
+    const fetchSpy = mockAccountFetch();
+
+    const result = await fetchCommandCodeQuotas(inMemoryAuthStorage());
+
+    expect(result).toMatchObject({ success: true });
+    expect(authorizationFromCall(fetchSpy.mock.calls[0])).toBe("Bearer sk-omp");
+  });
+
+  it("does not leak auth-file contents in a config error", async () => {
+    const home = await stubEmptyHome();
+    await mkdir(join(home, ".commandcode"), { recursive: true });
+    await writeFile(join(home, ".commandcode", "auth.json"), "{ not json sk-secret-leak");
+
+    const result = await fetchCommandCodeQuotas(inMemoryAuthStorage());
+
+    expect(result).toMatchObject({ success: false, error: { kind: "config" } });
+    if (result.success) throw new Error("expected failure");
+    expect(result.error.message).not.toContain("sk-secret-leak");
+    expect(result.error.message).toContain("not valid JSON");
   });
 });
 

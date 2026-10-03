@@ -4,6 +4,9 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **Command Code provider**: reads account quota from the Command Code API (`/alpha/whoami`, `/alpha/billing/credits`, `/alpha/billing/subscriptions`, `/alpha/usage/summary`) using the same endpoints and window semantics as `pi-commandcode-provider`. Renders like the OpenCode Go provider: a 5-hour rolling and a weekly credit window plus a monthly budget window, shown in `/usage` and `/commandcode:usage`. Reads the API key from `pi /login`, `COMMAND_CODE_API_KEY` / `COMMANDCODE_API_KEY`, or `~/.commandcode/auth.json` / `~/.omp/agent/auth.json`.
+
 ### Changed
 - **OpenCode Go provider**: replaced dashboard SSR scraping (workspace ID + auth cookie) with the official `GET https://opencode.ai/zen/go/v1/usage` endpoint authenticated by an OpenCode Go API key. Reads the key from `pi /login opencode-go` (`auth.json`), then `OPENCODE_GO_API_KEY`, then `OPENCODE_API_KEY` (the shared variable Pi's own opencode-go provider authenticates with), then a config file `apiKey` / the OpenCode CLI `auth.json`. The dashboard no longer server-renders usage data, so the previous scraper always failed with "Could not parse OpenCode Go dashboard usage windows"; legacy `workspaceId`/`authCookie` configs now report a migration hint. API windows reported as rate-limited now escalate to critical severity, matching every other provider.
 
