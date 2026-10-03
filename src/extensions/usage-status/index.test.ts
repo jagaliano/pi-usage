@@ -350,6 +350,13 @@ describe("usage-status extension lifecycle", () => {
         (call) => typeof call[1] === "string" && call[1].includes("credits:"),
       ),
     ).toBe(true);
+    // The shared row must stay compact: no severity glyph, no exhaustion hint.
+    const lastStatus = statusCalls
+      .map((call) => call[1])
+      .reverse()
+      .find((text): text is string => typeof text === "string");
+    expect(lastStatus).not.toContain("●");
+    expect(lastStatus).not.toContain("runs out");
   });
 
   it("never renders wider than the requested widget width", async () => {

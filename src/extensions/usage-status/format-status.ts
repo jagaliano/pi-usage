@@ -10,10 +10,6 @@ export type WindowStatus = {
   isCurrency?: boolean;
   usedValue?: number;
   limitValue?: number;
-  /** Percentage of the window elapsed at assessment time, when pace tracking applies. */
-  pacePercent?: number | null;
-  /** Projected usage at reset time, when pace tracking applies. */
-  projectedPercent?: number;
   /** Window length in seconds, used to estimate time-to-exhaustion. */
   windowSeconds?: number;
 };
@@ -62,29 +58,43 @@ function hasRealCounts(w: WindowStatus): boolean {
 }
 
 /**
- * Estimate how long until a paced window is exhausted when the projection says
- * it will run out before the window resets. Returns undefined when the window is
- * not on pace to exhaust, or there is not enough data.
+ * Estimate how long until a window is exhausted, assuming the current linear
+ * rate, when it is on pace to run out before reset.
+ *
+ * Uses only physical quantities (window length, reset time, usage) so it is not
+ * affected by `paceScale`, which intentionally distorts the assessment pace for
+ * some providers. Returns undefined when the window is not projected to exhaust
+ * before reset, is already exhausted, or lacks a usable reset time.
  */
 function formatExhaustionHint(w: WindowStatus): string | undefined {
-  if (w.projectedPercent === undefined || w.projectedPercent < 100)
-    return undefined;
-  if (w.pacePercent == null || w.pacePercent <= 0) return undefined;
+  if (w.severity === "none") return undefined;
+  if (w.limited || w.usedPercent >= 100) return undefined;
   if (w.usedPercent <= 0) return undefined;
   if (!w.windowSeconds || w.windowSeconds <= 0) return undefined;
+  if (!w.resetsAt) return undefined;
 
-  // Share of the window that must elapse for usage to reach 100%, assuming the
-  // current linear rate. projectedPercent >= 100 implies usedPercent >= pacePercent,
-  // so this lands in [pacePercent, 100].
-  const elapsedNeededPercent = (100 * w.pacePercent) / w.usedPercent;
-  if (!Number.isFinite(elapsedNeededPercent) || elapsedNeededPercent >= 100) {
-    return undefined;
+  const resetMs = Date.parse(w.resetsAt);
+  if (!Number.isFinite(resetMs)) return undefined;
+  const remainingMs = resetMs - Date.now();
+  if (remainingMs <= 0) return undefined;
+
+  const totalMs = w.windowSeconds * 1000;
+  const elapsedMs = totalMs - remainingMs;
+  if (elapsedMs <= 0) return undefined;
+
+  const elapsedFraction = elapsedMs / totalMs;
+  const usedFraction = w.usedPercent / 100;
+  // Only beats the reset when usage is ahead of elapsed time (used > elapsed).
+  if (usedFraction <= elapsedFraction) return undefined;
+
+  // Time for usage to reach 100% at the current rate, as a fraction of the window.
+  const timeToExhaustMs =
+    (totalMs * elapsedFraction * (1 - usedFraction)) / usedFraction;
+  if (!Number.isFinite(timeToExhaustMs) || timeToExhaustMs <= 0) {
+    return "now";
   }
-
-  const remainingMs =
-    w.windowSeconds * 1000 * (1 - elapsedNeededPercent / 100);
-  if (remainingMs <= 0) return "now";
-  return formatTimeRemaining(new Date(Date.now() + remainingMs));
+  if (timeToExhaustMs >= remainingMs) return undefined;
+  return formatTimeRemaining(new Date(Date.now() + timeToExhaustMs));
 }
 
 /**

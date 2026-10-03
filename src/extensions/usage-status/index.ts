@@ -109,18 +109,15 @@ function shouldShowInStatus(window: QuotaWindow): boolean {
 }
 
 export function toWindowStatus(window: QuotaWindow): WindowStatus {
-  const assessment = assessWindow(window);
   return {
     label: window.label,
     usedPercent: window.usedPercent,
-    severity: assessment.severity,
+    severity: assessWindow(window).severity,
     resetsAt: window.resetsAt.getTime() > 0 ? window.resetsAt.toISOString() : null,
     limited: window.limited ?? false,
     isCurrency: window.isCurrency,
     usedValue: window.usedValue,
     limitValue: window.limitValue,
-    pacePercent: assessment.pacePercent,
-    projectedPercent: assessment.projectedPercent,
     windowSeconds: window.windowSeconds,
   };
 }
@@ -235,7 +232,10 @@ function createStatusRefresher() {
         return;
       }
       const windows: WindowStatus[] = toStatusWindows(result.data.windows);
-      const status = formatStatusForFooter(ctx, windows, placement !== "statusBar");
+      // Only the TUI renders widget factories; other modes fall back to the
+      // shared row, which must stay compact.
+      const detailed = placement !== "statusBar" && ctx.mode === "tui";
+      const status = formatStatusForFooter(ctx, windows, detailed);
       lastStatus = status === undefined ? undefined : windows;
       setStatusSafely(ctx, status);
     } catch (error) {
@@ -281,7 +281,13 @@ function createStatusRefresher() {
     },
     renderLast(ctx: ExtensionContext): boolean {
       if (!lastStatus) return false;
-      return setStatusSafely(ctx, (ctx) => formatStatusForFooter(ctx, lastStatus ?? [], placement !== "statusBar"));
+      return setStatusSafely(ctx, (ctx) =>
+        formatStatusForFooter(
+          ctx,
+          lastStatus ?? [],
+          placement !== "statusBar" && ctx.mode === "tui",
+        ),
+      );
     },
   };
 }
